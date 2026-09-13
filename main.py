@@ -1,8 +1,21 @@
 import os
 import io
+import sys
 import base64
 from typing import Literal, Optional
 from dotenv import load_dotenv
+
+# Ensure UTF-8 encoding on Windows console to prevent UnicodeEncodeError ('charmap' codec)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import numpy as np
 import pandas as pd
@@ -556,7 +569,8 @@ def create_model_chain(model_name: str):
     llm_instance = ChatGoogleGenerativeAI(
         model=model_name,
         temperature=0,
-        google_api_key=api_key
+        google_api_key=api_key,
+        max_retries=0
     )
     return llm_instance.bind_tools([generate_chart])
 
@@ -566,7 +580,8 @@ def create_mistral_chain(model_name: str = "ministral-8b-latest"):
     llm_instance = ChatMistralAI(
         model=model_name,
         mistral_api_key=mistral_key,
-        temperature=0
+        temperature=0,
+        max_retries=0
     )
     return llm_instance.bind_tools([generate_chart])
 
@@ -576,7 +591,8 @@ def create_groq_chain(model_name: str = "llama-3.3-70b-versatile"):
     llm_instance = ChatGroq(
         model=model_name,
         groq_api_key=groq_key,
-        temperature=0
+        temperature=0,
+        max_retries=0
     )
     return llm_instance.bind_tools([generate_chart])
 
@@ -636,41 +652,62 @@ def invoke_ai_with_fallbacks(inputs: dict):
         except Exception as e:
             last_error = e
             err_msg = str(e)
-            print(f"⚠️ Gemini Model '{model_name}' issue: {err_msg[:120]}")
+            try:
+                print(f"[WARN] Gemini Model '{model_name}' issue: {err_msg[:120]}")
+            except Exception:
+                pass
             continue
 
     # 2. If Gemini exhausted or failed, automatically fall back to Mistral LLM via LangChain
     mistral_key = os.getenv("MISTRAL_API_KEY")
     if mistral_key:
-        print("🔄 All Gemini models exhausted. Automatically switching to Mistral LLM via LangChain...")
+        try:
+            print("[INFO] All Gemini models exhausted. Automatically switching to Mistral LLM via LangChain...")
+        except Exception:
+            pass
         for mistral_model in MISTRAL_MODELS:
             try:
                 mistral_chain = create_mistral_chain(mistral_model)
                 ai_message = mistral_chain.invoke(prompt_val)
                 if ai_message and getattr(ai_message, "tool_calls", None):
-                    print(f"✅ Successfully generated chart using Mistral LLM ({mistral_model})!")
+                    try:
+                        print(f"[SUCCESS] Successfully generated chart using Mistral LLM ({mistral_model})!")
+                    except Exception:
+                        pass
                     return ai_message, f"mistral:{mistral_model}"
             except Exception as e:
                 last_error = e
                 err_msg = str(e)
-                print(f"⚠️ Mistral Model '{mistral_model}' issue: {err_msg[:120]}")
+                try:
+                    print(f"[WARN] Mistral Model '{mistral_model}' issue: {err_msg[:120]}")
+                except Exception:
+                    pass
                 continue
 
     # 3. If Gemini & Mistral exhausted, automatically fall back to Groq Llama-3 via LangChain
     groq_key = os.getenv("GROQ_API_KEY")
     if groq_key:
-        print("🔄 Switching to Groq Llama-3 (LangChain) fallback...")
+        try:
+            print("[INFO] Switching to Groq Llama-3 (LangChain) fallback...")
+        except Exception:
+            pass
         for groq_model in GROQ_MODELS:
             try:
                 groq_chain = create_groq_chain(groq_model)
                 ai_message = groq_chain.invoke(prompt_val)
                 if ai_message and getattr(ai_message, "tool_calls", None):
-                    print(f"✅ Successfully generated chart using Groq Llama-3 ({groq_model})!")
+                    try:
+                        print(f"[SUCCESS] Successfully generated chart using Groq Llama-3 ({groq_model})!")
+                    except Exception:
+                        pass
                     return ai_message, f"groq:{groq_model}"
             except Exception as e:
                 last_error = e
                 err_msg = str(e)
-                print(f"⚠️ Groq Model '{groq_model}' issue: {err_msg[:120]}")
+                try:
+                    print(f"[WARN] Groq Model '{groq_model}' issue: {err_msg[:120]}")
+                except Exception:
+                    pass
                 continue
 
     return None, last_error

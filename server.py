@@ -1,5 +1,6 @@
 import os
 import io
+import sys
 import time
 import base64
 from typing import Optional
@@ -10,6 +11,18 @@ from pydantic import BaseModel
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")  # Ensure thread-safe headless rendering across API threads
+
+# Ensure UTF-8 output encoding on Windows console to prevent UnicodeEncodeError ('charmap' codec)
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import main
 
@@ -231,7 +244,10 @@ async def generate_chart_endpoint(req: QueryRequest):
                 }
             )
         except Exception as ai_err:
-            print(f"⚠️ Multi-model cascade error: {ai_err}")
+            try:
+                print(f"[WARN] Multi-model cascade error: {ai_err}")
+            except Exception:
+                pass
 
         if ai_message and getattr(ai_message, "tool_calls", None):
             tool_call = ai_message.tool_calls[0]
@@ -246,7 +262,10 @@ async def generate_chart_endpoint(req: QueryRequest):
         else:
             # Bulletproof instant fallback: Smart Heuristic Extractor
             # Guarantees zero 429 quota exhaustion errors
-            print(f"⚡ Smart Heuristic instant extraction activated for query: '{req.query}'")
+            try:
+                print(f"[INFO] Smart Heuristic instant extraction activated for query: '{req.query}'")
+            except Exception:
+                pass
             args = main.heuristic_chart_extractor(req.query, current_df)
             tokens_info = {
                 "total": 0,
@@ -272,7 +291,10 @@ async def generate_chart_endpoint(req: QueryRequest):
 
         # Self-healing fallback: If LLM generated bad args, instantly recover via heuristic
         if isinstance(data_url, str) and data_url.startswith("Error generating chart:"):
-            print(f"⚠️ AI produced rendering error: '{data_url[:80]}'. Self-healing via Heuristic...")
+            try:
+                print(f"[WARN] AI produced rendering error: '{data_url[:80]}'. Self-healing via Heuristic...")
+            except Exception:
+                pass
             args = main.heuristic_chart_extractor(req.query, current_df)
             if req.style:
                 args["style"] = req.style
