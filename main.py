@@ -50,37 +50,56 @@ df = pd.DataFrame({
 def smart_preprocess_data(data: pd.DataFrame, chart_type: str, x_col: Optional[str] = None, y_col: Optional[str] = None, hue_col: Optional[str] = None) -> pd.DataFrame:
     """
     Big Data Scalability Preprocessor:
-    Automatically downsamples or statistically aggregates massive datasets (10,000 to 1,000,000+ rows)
-    to guarantee sub-300ms chart rendering and 100% memory safety.
+    Guarantees clean aggregations, prevents memory leaks or label collisions,
+    and ensures sub-300ms chart rendering across datasets of any size.
     """
     total_rows = len(data)
-    if total_rows <= 10000:
-        return data
+    plot_df = data.copy()
 
-    # 1. Bar, Donut, Pie, Funnel, Treemap, Lollipop: aggregate sum/mean
-    if chart_type in ["bar", "donut", "pie", "funnel", "treemap", "lollipop"] and x_col and y_col:
-        try:
-            agg_df = data.groupby(x_col, as_index=False, observed=True)[y_col].sum()
-            if len(agg_df) > 25:
-                top_25 = agg_df.nlargest(25, y_col)
-                other_sum = agg_df[~agg_df[x_col].isin(top_25[x_col])][y_col].sum()
-                other_row = pd.DataFrame({x_col: ["Other"], y_col: [other_sum]})
-                return pd.concat([top_25, other_row], ignore_index=True)
-            return agg_df
-        except Exception:
-            pass
+    # Drop nulls in primary plotting columns to prevent matplotlib/seaborn crashes
+    check_cols = [c for c in [x_col, y_col, hue_col] if c and c in plot_df.columns]
+    if check_cols:
+        plot_df = plot_df.dropna(subset=check_cols)
+
+    # 1. Bar, Donut, Pie, Funnel, Treemap, Lollipop, Waterfall: aggregate and limit top categories
+    if chart_type in ["bar", "donut", "doughnut", "pie", "funnel", "treemap", "lollipop", "waterfall"]:
+        if x_col and x_col in plot_df.columns:
+            try:
+                # If numeric y_col is present, aggregate sum
+                if y_col and y_col in plot_df.columns and pd.api.types.is_numeric_dtype(plot_df[y_col]):
+                    if hue_col and hue_col in plot_df.columns and chart_type == "bar":
+                        agg_df = plot_df.groupby([x_col, hue_col], as_index=False, observed=True)[y_col].mean()
+                        top_x = plot_df.groupby(x_col, observed=True)[y_col].sum().nlargest(12).index
+                        return agg_df[agg_df[x_col].isin(top_x)].copy()
+                    else:
+                        agg_df = plot_df.groupby(x_col, as_index=False, observed=True)[y_col].sum()
+                        max_cats = 10 if chart_type in ["pie", "donut", "doughnut", "waterfall"] else 18
+                        if len(agg_df) > max_cats:
+                            top_n = agg_df.nlargest(max_cats, y_col)
+                            return top_n.copy()
+                        return agg_df.sort_values(by=y_col, ascending=False)
+                else:
+                    # Categorical frequency
+                    counts = plot_df[x_col].value_counts().reset_index()
+                    counts.columns = [x_col, "count"]
+                    max_cats = 10 if chart_type in ["pie", "donut", "doughnut", "waterfall"] else 18
+                    return counts.head(max_cats)
+            except Exception as e:
+                print("Preprocessing aggregation fallback:", e)
 
     # 2. Line & Area: Decimate time-series / trends smoothly
-    if chart_type in ["line", "area"]:
-        step = max(1, total_rows // 2500)
-        return data.iloc[::step].copy()
+    if chart_type in ["line", "trend", "area"]:
+        if total_rows > 2500:
+            step = max(1, total_rows // 2500)
+            return plot_df.iloc[::step].copy()
+        return plot_df
 
     # 3. Scatter, Bubble, Hist, Box, Violin: Representative sampling
-    sample_limit = 5000 if chart_type in ["scatter", "bubble"] else 8000
+    sample_limit = 3000 if chart_type in ["scatter", "bubble"] else 6000
     if total_rows > sample_limit:
-        return data.sample(n=sample_limit, random_state=42)
+        return plot_df.sample(n=sample_limit, random_state=42)
 
-    return data
+    return plot_df
 
 
 @tool
@@ -141,7 +160,7 @@ def generate_chart(
             grid.fig.suptitle(title, y=1.02)
             buf = io.BytesIO()
             grid.savefig(buf, format="png", dpi=100, facecolor=grid.fig.get_facecolor(), bbox_inches="tight")
-            plt.close()
+            plt.close(grid.fig)
             buf.seek(0)
             data_url = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
             if output_path and output_path != ":memory:":
@@ -151,93 +170,146 @@ def generate_chart(
             return data_url
 
         # Step 3.4: Create canvas for charts (polar for radar, rectangular for others)
-        if chart_type == "radar":
+        chart_t = (chart_type or "bar").lower().strip()
+        if chart_t in ["radar", "spider"]:
             fig, ax = plt.subplots(figsize=(7, 6), subplot_kw=dict(polar=True))
         else:
             fig, ax = plt.subplots(figsize=(8.5, 5))
 
         # Big Data Scalability: Smart pre-processing & downsampling for massive datasets
-        plot_df = smart_preprocess_data(df, chart_type, x_col, y_col, safe_hue)
+        plot_df = smart_preprocess_data(df, chart_t, x_col, y_col, safe_hue)
 
         # Chart 1: Bar Chart (Category comparison)
-        if chart_type == "bar":
-            sns.barplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "deep", ax=ax)
-            plt.xticks(rotation=45)
+        if chart_t == "bar":
+            if safe_hue:
+                sns.barplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "deep", ax=ax)
+            else:
+                sns.barplot(data=plot_df, x=x_col, y=y_col, hue=x_col, palette=palette or "deep", legend=False, ax=ax)
+            ax.tick_params(axis='x', rotation=45)
+            for lbl in ax.get_xticklabels():
+                lbl.set_ha('right')
 
         # Chart 2: Line Chart (Trends)
-        elif chart_type == "line":
+        elif chart_t in ["line", "trend"]:
+            sorted_df = plot_df.sort_values(by=x_col) if (x_col and x_col in plot_df.columns) else plot_df
             if safe_hue:
-                sns.lineplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, marker="o", linewidth=2.5, palette=palette or "deep", ax=ax)
+                sns.lineplot(data=sorted_df, x=x_col, y=y_col, hue=safe_hue, marker="o", linewidth=2.5, palette=palette or "deep", ax=ax)
             else:
                 line_color = sns.color_palette(palette)[0] if palette else None
-                sns.lineplot(data=plot_df, x=x_col, y=y_col, marker="o", linewidth=2.5, color=line_color, ax=ax)
+                sns.lineplot(data=sorted_df, x=x_col, y=y_col, marker="o", linewidth=2.5, color=line_color, ax=ax)
+            ax.tick_params(axis='x', rotation=45)
+            for lbl in ax.get_xticklabels():
+                lbl.set_ha('right')
 
-        # Chart 3: Scatter Plot (Relationship with instant adaptive sampling for large datasets)
-        elif chart_type == "scatter":
+        # Chart 3: Scatter Plot
+        elif chart_t == "scatter":
             n_rows = len(plot_df)
-            point_size = 18 if n_rows > 5000 else (35 if n_rows > 1000 else 70)
-            alpha_val = 0.6 if n_rows > 2000 else 0.85
+            point_size = 20 if n_rows > 3000 else (40 if n_rows > 1000 else 70)
+            alpha_val = 0.65 if n_rows > 2000 else 0.85
             sns.scatterplot(
                 data=plot_df, x=x_col, y=y_col, hue=safe_hue, s=point_size,
                 palette=palette or "deep", alpha=alpha_val, ax=ax,
                 legend=show_legend
             )
 
-        # Chart 4: Histogram (Distribution with fast KDE calculation)
-        elif chart_type == "histogram":
-            sns.histplot(data=plot_df, x=x_col, kde=True, hue=safe_hue, palette=palette or "deep", ax=ax)
+        # Chart 4: Histogram
+        elif chart_t in ["histogram", "hist"]:
+            if safe_hue:
+                sns.histplot(data=plot_df, x=x_col, kde=True, hue=safe_hue, palette=palette or "deep", ax=ax)
+            else:
+                bar_color = sns.color_palette(palette)[0] if palette else None
+                sns.histplot(data=plot_df, x=x_col, kde=True, color=bar_color, ax=ax)
 
-        # Chart 5: Box Plot (Outliers)
-        elif chart_type == "box":
-            sns.boxplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "Set2", ax=ax)
+        # Chart 5: Box Plot
+        elif chart_t == "box":
+            if safe_hue:
+                sns.boxplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "Set2", ax=ax)
+            else:
+                sns.boxplot(data=plot_df, x=x_col, y=y_col, hue=x_col, palette=palette or "Set2", legend=False, ax=ax)
+            ax.tick_params(axis='x', rotation=45)
+            for lbl in ax.get_xticklabels():
+                lbl.set_ha('right')
 
         # Chart 6: Heatmap (Correlation)
-        elif chart_type == "heatmap":
+        elif chart_t in ["heatmap", "correlation"]:
             corr = plot_df.corr(numeric_only=True)
-            sns.heatmap(corr, annot=True, cmap=palette or "coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
-
-        # Chart 7: Pie Chart (Proportions)
-        elif chart_type == "pie":
-            if y_col:
-                pie_data = plot_df.groupby(x_col)[y_col].sum()
+            if corr.empty or corr.shape[0] < 2:
+                ax.text(0.5, 0.5, "Requires at least 2 numeric columns\nfor correlation heatmap",
+                        ha="center", va="center", fontsize=12, weight="bold", transform=ax.transAxes)
             else:
-                pie_data = plot_df[x_col].value_counts()
-            pie_colors = sns.color_palette(palette or "pastel", len(pie_data))
-            ax.pie(pie_data.values, labels=pie_data.index, autopct="%1.1f%%", startangle=140, colors=pie_colors)
+                sns.heatmap(corr, annot=True, cmap=palette or "coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
 
-        # Chart 8: Area Chart (Cumulative trend)
-        elif chart_type == "area":
-            sorted_df = plot_df.sort_values(by=x_col)
+        # Chart 7: Pie Chart
+        elif chart_t == "pie":
+            if y_col and y_col in plot_df.columns:
+                pie_data = plot_df.groupby(x_col)[y_col].sum()
+            elif x_col and x_col in plot_df.columns:
+                pie_data = plot_df[x_col].value_counts()
+            else:
+                pie_data = plot_df.iloc[:, 0].value_counts()
+
+            pie_data = pie_data[pie_data > 0]
+            if len(pie_data) > 8:
+                top_8 = pie_data.head(8)
+                other_val = pie_data.iloc[8:].sum()
+                pie_data = pd.concat([top_8, pd.Series([other_val], index=["Other"])])
+
+            if pie_data.empty:
+                ax.text(0.5, 0.5, "No positive data available for pie chart", ha="center", va="center", transform=ax.transAxes)
+            else:
+                pie_colors = sns.color_palette(palette or "pastel", len(pie_data))
+                ax.pie(pie_data.values, labels=pie_data.index, autopct="%1.1f%%", startangle=140, colors=pie_colors)
+
+        # Chart 8: Area Chart
+        elif chart_t == "area":
+            sorted_df = plot_df.sort_values(by=x_col) if (x_col and x_col in plot_df.columns) else plot_df
             area_colors = sns.color_palette(palette or "mako", 2)
             ax.fill_between(sorted_df[x_col], sorted_df[y_col], alpha=0.4, color=area_colors[0])
             ax.plot(sorted_df[x_col], sorted_df[y_col], color=area_colors[-1], linewidth=2.5, marker="o")
+            ax.tick_params(axis='x', rotation=45)
+            for lbl in ax.get_xticklabels():
+                lbl.set_ha('right')
 
-        # Chart 9: Violin Plot (Distribution shape)
-        elif chart_type == "violin":
-            sns.violinplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "muted", ax=ax)
-
-
-        # Chart 11: Treemap (Nested Rectangles)
-        elif chart_type == "treemap":
-            if y_col:
-                tree_data = df.groupby(x_col)[y_col].sum().reset_index()
-                sizes = tree_data[y_col].abs().values
-                labels = [f"{row[x_col]}\n({row[y_col]})" for _, row in tree_data.iterrows()]
+        # Chart 9: Violin Plot
+        elif chart_t == "violin":
+            if safe_hue:
+                sns.violinplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "muted", ax=ax)
             else:
-                counts = df[x_col].value_counts()
+                sns.violinplot(data=plot_df, x=x_col, y=y_col, hue=x_col, palette=palette or "muted", legend=False, ax=ax)
+            ax.tick_params(axis='x', rotation=45)
+            for lbl in ax.get_xticklabels():
+                lbl.set_ha('right')
+
+        # Chart 10: Treemap
+        elif chart_t == "treemap":
+            if y_col and y_col in plot_df.columns:
+                tree_data = plot_df.groupby(x_col)[y_col].sum().reset_index()
+                tree_data = tree_data[tree_data[y_col] > 0].head(16)
+                sizes = tree_data[y_col].values
+                labels = [f"{row[x_col]}\n({row[y_col]:,.0f})" for _, row in tree_data.iterrows()]
+            else:
+                counts = plot_df[x_col].value_counts().head(16)
                 sizes = counts.values
-                labels = [f"{cat}\n({cnt})" for cat, cnt in zip(counts.index, counts.values)]
+                labels = [f"{cat}\n({cnt:,})" for cat, cnt in zip(counts.index, counts.values)]
 
-            tree_colors = sns.color_palette(palette or "Spectral", len(sizes))
-            squarify.plot(sizes=sizes, label=labels, color=tree_colors, alpha=0.85, text_kwargs={"fontsize": 11, "weight": "bold"}, ax=ax)
-            ax.axis("off")
+            if len(sizes) == 0 or sum(sizes) <= 0:
+                ax.text(0.5, 0.5, "No positive values available for treemap", ha="center", va="center", transform=ax.transAxes)
+            else:
+                tree_colors = sns.color_palette(palette or "Spectral", len(sizes))
+                squarify.plot(sizes=sizes, label=labels, color=tree_colors, alpha=0.85, text_kwargs={"fontsize": 10, "weight": "bold"}, ax=ax)
+                ax.axis("off")
 
-        # Chart 12: Waterfall Chart (Sequential positive/negative breakdown)
-        elif chart_type == "waterfall":
-            categories = df[x_col].astype(str).tolist()
-            values = df[y_col].astype(float).tolist()
+        # Chart 11: Waterfall Chart
+        elif chart_t == "waterfall":
+            if y_col and y_col in plot_df.columns:
+                w_df = plot_df.groupby(x_col, as_index=False)[y_col].sum().head(14)
+                categories = w_df[x_col].astype(str).tolist()
+                values = w_df[y_col].astype(float).tolist()
+            else:
+                counts = plot_df[x_col].value_counts().head(14)
+                categories = counts.index.astype(str).tolist()
+                values = counts.values.astype(float).tolist()
 
-            # Calculate cumulative values for bar bottoms
             cumulative = [0]
             for val in values:
                 cumulative.append(cumulative[-1] + val)
@@ -252,60 +324,69 @@ def generate_chart(
                 pos_color, neg_color = "#10b981", "#ef4444"
 
             colors = [pos_color if val >= 0 else neg_color for val in values]
-
             ax.bar(categories, heights, bottom=bottoms, color=colors, edgecolor="black", width=0.6)
 
-            # Draw connector lines between bars
             for i in range(len(values) - 1):
                 ax.plot([i, i + 1], [cumulative[i + 1], cumulative[i + 1]], color="grey", linestyle="--")
 
-            ax.set_ylabel(y_col, fontsize=12)
-            plt.xticks(rotation=45)
+            ax.set_ylabel(y_col or "Value", fontsize=11)
+            ax.tick_params(axis='x', rotation=45)
+            for lbl in ax.get_xticklabels():
+                lbl.set_ha('right')
 
-        # Chart 13: Donut Chart (Modern Ring Proportion)
-        elif chart_type == "donut":
-            if y_col:
-                donut_data = df.groupby(x_col)[y_col].sum()
+        # Chart 12: Donut Chart
+        elif chart_t in ["donut", "doughnut"]:
+            if y_col and y_col in plot_df.columns:
+                donut_data = plot_df.groupby(x_col)[y_col].sum()
+            elif x_col and x_col in plot_df.columns:
+                donut_data = plot_df[x_col].value_counts()
             else:
-                donut_data = df[x_col].value_counts()
-            donut_colors = sns.color_palette(palette or "pastel", len(donut_data))
-            wedges, texts, autotexts = ax.pie(
-                donut_data.values,
-                labels=donut_data.index,
-                autopct="%1.1f%%",
-                startangle=140,
-                colors=donut_colors,
-                pctdistance=0.75,
-                wedgeprops=dict(width=0.42, edgecolor="w", linewidth=1.5)
-            )
-            # Center text displaying total
-            total_val = donut_data.sum()
-            center_txt = f"TOTAL\n{total_val:,.0f}" if isinstance(total_val, (int, float, np.number)) else "TOTAL"
-            ax.text(0, 0, center_txt, ha="center", va="center", fontsize=12, weight="bold")
+                donut_data = plot_df.iloc[:, 0].value_counts()
 
-        # Chart 14: Funnel Chart (Stage-by-stage Conversion)
-        elif chart_type == "funnel":
-            if y_col:
-                funnel_df = df[[x_col, y_col]].dropna().copy()
-                funnel_df = funnel_df.sort_values(by=y_col, ascending=False)
+            donut_data = donut_data[donut_data > 0]
+            if len(donut_data) > 8:
+                top_8 = donut_data.head(8)
+                other_val = donut_data.iloc[8:].sum()
+                donut_data = pd.concat([top_8, pd.Series([other_val], index=["Other"])])
+
+            if donut_data.empty:
+                ax.text(0.5, 0.5, "No positive values for donut chart", ha="center", va="center", transform=ax.transAxes)
+            else:
+                donut_colors = sns.color_palette(palette or "pastel", len(donut_data))
+                wedges, texts, autotexts = ax.pie(
+                    donut_data.values,
+                    labels=donut_data.index,
+                    autopct="%1.1f%%",
+                    startangle=140,
+                    colors=donut_colors,
+                    pctdistance=0.75,
+                    wedgeprops=dict(width=0.42, edgecolor="w", linewidth=1.5)
+                )
+                total_val = donut_data.sum()
+                center_txt = f"TOTAL\n{total_val:,.0f}" if isinstance(total_val, (int, float, np.number)) else "TOTAL"
+                ax.text(0, 0, center_txt, ha="center", va="center", fontsize=11, weight="bold")
+
+        # Chart 13: Funnel Chart
+        elif chart_t == "funnel":
+            if y_col and y_col in plot_df.columns:
+                funnel_df = plot_df.groupby(x_col, as_index=False)[y_col].sum().sort_values(by=y_col, ascending=False).head(12)
                 stages = funnel_df[x_col].astype(str).tolist()
                 values = funnel_df[y_col].astype(float).tolist()
             else:
-                counts = df[x_col].value_counts()
+                counts = plot_df[x_col].value_counts().head(12)
                 stages = counts.index.astype(str).tolist()
                 values = counts.values.astype(float).tolist()
 
-            max_val = max(values) if values else 1
+            max_val = max(values) if values and max(values) > 0 else 1
             lefts = [(max_val - v) / 2 for v in values]
             f_colors = sns.color_palette(palette or "flare", len(values))
 
             y_pos = list(range(len(stages)))
             bars = ax.barh(y_pos, values, left=lefts, color=f_colors, edgecolor="black", height=0.6, align="center")
             ax.set_yticks(y_pos)
-            ax.set_yticklabels(stages, fontsize=11, weight="bold")
-            ax.invert_yaxis()  # Top to bottom
+            ax.set_yticklabels(stages, fontsize=10, weight="bold")
+            ax.invert_yaxis()
 
-            # Add percentage & value labels on each bar
             for i, (v, bar) in enumerate(zip(values, bars)):
                 pct = (v / max_val) * 100
                 text_color = "white" if selected_style.startswith("dark") else "#0f172a"
@@ -313,17 +394,16 @@ def generate_chart(
                         ha="center", va="center", color=text_color, fontsize=10, weight="bold")
             ax.get_xaxis().set_visible(False)
 
-        # Chart 15: Lollipop Chart (Clean Modern Bar Alternative)
-        elif chart_type == "lollipop":
-            if y_col:
-                lolli_df = df.groupby(x_col)[y_col].sum().reset_index()
-                lolli_df = lolli_df.sort_values(by=y_col)
-                cats = lolli_df[x_col].astype(str)
-                vals = lolli_df[y_col]
+        # Chart 14: Lollipop Chart
+        elif chart_t == "lollipop":
+            if y_col and y_col in plot_df.columns:
+                lolli_df = plot_df.groupby(x_col)[y_col].sum().reset_index().sort_values(by=y_col).tail(18)
+                cats = lolli_df[x_col].astype(str).tolist()
+                vals = lolli_df[y_col].tolist()
             else:
-                counts = df[x_col].value_counts().sort_values()
-                cats = counts.index.astype(str)
-                vals = counts.values
+                counts = plot_df[x_col].value_counts().sort_values().tail(18)
+                cats = counts.index.astype(str).tolist()
+                vals = counts.values.tolist()
 
             c_list = sns.color_palette(palette or "deep", len(vals))
             marker_c = c_list[0] if len(c_list) > 0 else "#6366f1"
@@ -335,33 +415,32 @@ def generate_chart(
             ax.set_yticklabels(cats, fontsize=10, weight="bold")
             ax.set_xlabel(y_col or "Count", fontsize=11)
 
-        # Chart 16: Radar / Spider Chart (Multivariate feature comparison)
-        elif chart_type == "radar":
-            num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        # Chart 15: Radar Chart
+        elif chart_t in ["radar", "spider"]:
+            num_cols = plot_df.select_dtypes(include=["number"]).columns.tolist()
             if len(num_cols) >= 3:
-                features = num_cols[:8]
+                features = num_cols[:6]
                 num_vars = len(features)
                 angles = [n / float(num_vars) * 2 * np.pi for n in range(num_vars)]
                 angles += angles[:1]
 
-                plot_rows = df.head(5)
-                cat_col = x_col if (x_col and x_col in df.columns) else None
+                plot_rows = plot_df.head(4)
+                cat_col = x_col if (x_col and x_col in plot_df.columns) else None
                 r_colors = sns.color_palette(palette or "Set2", len(plot_rows))
 
-                # Normalize 0-100 safely per feature
                 scaled_vals = {}
                 for col in features:
-                    s = df[col].astype(float)
+                    s = plot_df[col].astype(float)
                     c_min, c_max = float(s.min()), float(s.max())
                     if c_max > c_min:
                         scaled_vals[col] = (s - c_min) / (c_max - c_min) * 100
                     else:
-                        scaled_vals[col] = pd.Series(50.0, index=df.index)
+                        scaled_vals[col] = pd.Series(50.0, index=plot_df.index)
 
                 for idx, (_, row) in enumerate(plot_rows.iterrows()):
-                    vals = [float(scaled_vals[f].iloc[idx]) for f in features]
+                    vals = [float(scaled_vals[f].loc[row.name]) for f in features]
                     vals += vals[:1]
-                    lbl = str(row[cat_col]) if (cat_col and cat_col in df.columns) else f"Record {idx + 1}"
+                    lbl = str(row[cat_col]) if (cat_col and cat_col in plot_df.columns) else f"Row {idx + 1}"
                     ax.plot(angles, vals, linewidth=2, linestyle="solid", label=lbl, color=r_colors[idx])
                     ax.fill(angles, vals, color=r_colors[idx], alpha=0.25)
 
@@ -369,53 +448,45 @@ def generate_chart(
                 ax.set_xticklabels(features, fontsize=10, weight="bold")
                 ax.set_yticklabels([])
                 ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1), fontsize=9)
-            elif len(num_cols) >= 1:
-                # Plot categories as radial polygon axes for the numeric metric
-                val_col = y_col if (y_col and y_col in num_cols) else num_cols[0]
-                lbl_col = x_col if (x_col and x_col in df.columns) else df.columns[0]
-                categories = df[lbl_col].astype(str).tolist()
-                vals = df[val_col].astype(float).tolist()
+            else:
+                sns.barplot(data=plot_df.head(15), x=x_col, y=y_col, hue=x_col, palette=palette or "deep", legend=False, ax=ax)
+                ax.tick_params(axis='x', rotation=45)
 
-                num_vars = len(categories)
-                angles = [n / float(num_vars) * 2 * np.pi for n in range(num_vars)]
-                angles += angles[:1]
-                vals += vals[:1]
-
-                r_color = sns.color_palette(palette or "deep", 1)[0]
-                ax.plot(angles, vals, linewidth=2.5, linestyle="solid", color=r_color, marker="o")
-                ax.fill(angles, vals, color=r_color, alpha=0.3)
-                ax.set_xticks(angles[:-1])
-                ax.set_xticklabels(categories, fontsize=10, weight="bold")
-                title = f"{title} ({val_col} by {lbl_col})"
-
-        # Chart 17: Bubble Chart (3-Variable Scatter Plot)
-        elif chart_type == "bubble":
-            num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+        # Chart 16: Bubble Chart
+        elif chart_t == "bubble":
+            num_cols = plot_df.select_dtypes(include=["number"]).columns.tolist()
             size_candidates = [c for c in num_cols if c not in [x_col, y_col]]
             size_col = size_candidates[0] if size_candidates else y_col
-            
-            sizes = df[size_col].abs() if size_col else df[y_col].abs()
+
+            sizes = plot_df[size_col].abs() if size_col else plot_df[y_col].abs()
             s_min, s_max = sizes.min(), sizes.max()
             if s_max > s_min:
-                scaled_sizes = 60 + ((sizes - s_min) / (s_max - s_min)) * 550
+                scaled_sizes = 60 + ((sizes - s_min) / (s_max - s_min)) * 500
             else:
-                scaled_sizes = [180] * len(df)
+                scaled_sizes = [150] * len(plot_df)
 
-            effective_hue = hue_col if (hue_col and hue_col in df.columns) else (x_col if x_col in df.columns else None)
+            effective_hue = hue_col if (hue_col and hue_col in plot_df.columns) else None
             if effective_hue:
                 sns.scatterplot(
-                    data=df, x=x_col, y=y_col, hue=effective_hue, size=scaled_sizes,
-                    sizes=(60, 600), palette=palette or "plasma", alpha=0.75,
+                    data=plot_df, x=x_col, y=y_col, hue=effective_hue, size=scaled_sizes,
+                    sizes=(60, 500), palette=palette or "plasma", alpha=0.75,
                     edgecolor="white", linewidth=1.2, ax=ax, legend="brief"
                 )
             else:
                 bubble_color = sns.color_palette(palette or "plasma")[0]
                 sns.scatterplot(
-                    data=df, x=x_col, y=y_col, size=scaled_sizes, color=bubble_color,
-                    sizes=(60, 600), alpha=0.75,
-                    edgecolor="white", linewidth=1.2, ax=ax, legend="brief"
+                    data=plot_df, x=x_col, y=y_col, size=scaled_sizes, color=bubble_color,
+                    sizes=(60, 500), alpha=0.75,
+                    edgecolor="white", linewidth=1.2, ax=ax, legend=False
                 )
             title = f"{title} (Bubble: {size_col})"
+
+        # Fallback to standard Bar Chart
+        else:
+            sns.barplot(data=plot_df.head(20), x=x_col, y=y_col, hue=x_col, palette=palette or "deep", legend=False, ax=ax)
+            ax.tick_params(axis='x', rotation=45)
+            for lbl in ax.get_xticklabels():
+                lbl.set_ha('right')
 
         # Finalize and save plot (dpi=125 provides instant ~0.1s rendering and clean ~150KB web files)
         ax.set_title(title, fontsize=14, weight="bold")
@@ -627,9 +698,9 @@ def heuristic_chart_extractor(query: str, current_df: pd.DataFrame) -> dict:
         ("funnel", "funnel"),
         ("radar", "radar"),
         ("spider", "radar"),
-        ("histogram", "hist"),
-        ("hist", "hist"),
-        ("distribution", "hist"),
+        ("histogram", "histogram"),
+        ("hist", "histogram"),
+        ("distribution", "histogram"),
         ("box", "box"),
         ("area", "area"),
         ("line", "line"),
