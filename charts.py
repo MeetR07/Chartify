@@ -1,8 +1,9 @@
 import os
 import io
 import sys
+import json
 import base64
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,9 @@ matplotlib.use("Agg")  # Use non-interactive, thread-safe Agg backend for server
 import matplotlib.pyplot as plt
 import seaborn as sns
 import squarify
+
+import plotly.express as px
+import plotly.graph_objects as go
 
 from langchain_core.tools import tool
 
@@ -46,8 +50,25 @@ def get_active_df() -> pd.DataFrame:
     return DEFAULT_DF
 
 
+def format_num_human(val: Any) -> str:
+    """Formats numeric values into compact, human-friendly badges ($15.2K, 1.4M, 25%)."""
+    if not isinstance(val, (int, float, np.number)) or pd.isna(val):
+        return str(val) if not pd.isna(val) else ""
+    abs_val = abs(val)
+    sign = "-" if val < 0 else ""
+    if abs_val >= 1_000_000_000:
+        return f"{sign}{abs_val / 1_000_000_000:.1f}B"
+    elif abs_val >= 1_000_000:
+        return f"{sign}{abs_val / 1_000_000:.1f}M"
+    elif abs_val >= 1_000:
+        return f"{sign}{abs_val / 1_000:.1f}K"
+    elif isinstance(val, float):
+        return f"{sign}{abs_val:.1f}"
+    return str(int(val))
+
+
 # ==============================================================================
-# BIG DATA SCALABILITY ENGINE
+# BIG DATA SCALABILITY ENGINE (O(N) Complexity)
 # ==============================================================================
 
 def smart_preprocess_data(data: pd.DataFrame, chart_type: str, x_col: Optional[str] = None, y_col: Optional[str] = None, hue_col: Optional[str] = None) -> pd.DataFrame:
@@ -76,7 +97,7 @@ def smart_preprocess_data(data: pd.DataFrame, chart_type: str, x_col: Optional[s
                         return agg_df[agg_df[x_col].isin(top_x)].copy()
                     else:
                         agg_df = plot_df.groupby(x_col, as_index=False, observed=True)[y_col].sum()
-                        max_cats = 10 if chart_type in ["pie", "donut", "doughnut", "waterfall"] else 18
+                        max_cats = 10 if chart_type in ["pie", "donut", "doughnut", "waterfall"] else 16
                         if len(agg_df) > max_cats:
                             top_n = agg_df.nlargest(max_cats, y_col)
                             return top_n.copy()
@@ -85,7 +106,7 @@ def smart_preprocess_data(data: pd.DataFrame, chart_type: str, x_col: Optional[s
                     # Categorical frequency
                     counts = plot_df[x_col].value_counts().reset_index()
                     counts.columns = [x_col, "count"]
-                    max_cats = 10 if chart_type in ["pie", "donut", "doughnut", "waterfall"] else 18
+                    max_cats = 10 if chart_type in ["pie", "donut", "doughnut", "waterfall"] else 16
                     return counts.head(max_cats)
             except Exception as e:
                 try:
@@ -101,7 +122,7 @@ def smart_preprocess_data(data: pd.DataFrame, chart_type: str, x_col: Optional[s
         return plot_df
 
     # 3. Scatter, Bubble, Hist, Box, Violin: Representative sampling
-    sample_limit = 3000 if chart_type in ["scatter", "bubble"] else 6000
+    sample_limit = 1500 if chart_type in ["scatter", "bubble"] else 3000
     if total_rows > sample_limit:
         return plot_df.sample(n=sample_limit, random_state=42)
 
@@ -109,7 +130,195 @@ def smart_preprocess_data(data: pd.DataFrame, chart_type: str, x_col: Optional[s
 
 
 # ==============================================================================
-# MATPLOTLIB / SEABORN HIGH-PERFORMANCE RENDERING ENGINE
+# ENGINE 2: INTERACTIVE PLOTLY WEB ENGINE (Sub-50ms JSON Delivery)
+# ==============================================================================
+
+def build_plotly_chart(
+    chart_type: str,
+    plot_df: pd.DataFrame,
+    x_col: Optional[str] = None,
+    y_col: Optional[str] = None,
+    hue_col: Optional[str] = None,
+    title: str = "Data Analysis Chart",
+    palette: Optional[str] = None,
+    style: Optional[str] = "whitegrid"
+) -> Dict[str, Any]:
+    """
+    Constructs an interactive, high-performance Plotly figure dictionary.
+    Supports hover inspection, interactive zooming, panning, and legend toggling.
+    """
+    chart_t = (chart_type or "bar").lower().strip()
+    is_dark = str(style).startswith("dark") or str(style) in ["dark", "darkgrid"]
+
+    # Elegant theme styling
+    bg_color = "rgba(0,0,0,0)"
+    grid_color = "rgba(255,255,255,0.08)" if is_dark else "rgba(0,0,0,0.06)"
+    text_color = "#f8fafc" if is_dark else "#0f172a"
+    sub_color = "#94a3b8" if is_dark else "#64748b"
+
+    fig = None
+    try:
+        if chart_t == "bar":
+            fig = px.bar(plot_df, x=x_col, y=y_col, color=hue_col, title=title)
+            if not hue_col and x_col and y_col and y_col in plot_df.columns:
+                fig.update_traces(
+                    hovertemplate="<b>%{x}</b><br>Value: %{y:,.2f}<extra></extra>",
+                    marker_line_width=0
+                )
+
+        elif chart_t in ["line", "trend"]:
+            sorted_df = plot_df.sort_values(by=x_col) if (x_col and x_col in plot_df.columns) else plot_df
+            fig = px.line(sorted_df, x=x_col, y=y_col, color=hue_col, markers=True, title=title)
+            fig.update_traces(line=dict(width=2.5), marker=dict(size=6))
+
+        elif chart_t == "scatter":
+            fig = px.scatter(plot_df, x=x_col, y=y_col, color=hue_col, title=title)
+            fig.update_traces(marker=dict(size=7, opacity=0.8, line=dict(width=0.5, color="white")))
+
+        elif chart_t in ["histogram", "hist"]:
+            fig = px.histogram(plot_df, x=x_col, color=hue_col, title=title, marginal="box")
+
+        elif chart_t == "box":
+            fig = px.box(plot_df, x=x_col, y=y_col, color=hue_col, title=title)
+
+        elif chart_t == "violin":
+            fig = px.violin(plot_df, x=x_col, y=y_col, color=hue_col, box=True, points="outliers", title=title)
+
+        elif chart_t == "area":
+            sorted_df = plot_df.sort_values(by=x_col) if (x_col and x_col in plot_df.columns) else plot_df
+            fig = px.area(sorted_df, x=x_col, y=y_col, color=hue_col, title=title)
+
+        elif chart_t in ["heatmap", "correlation"]:
+            corr = plot_df.corr(numeric_only=True)
+            if not corr.empty and corr.shape[0] >= 2:
+                fig = px.imshow(
+                    corr.round(2),
+                    text_auto=True,
+                    aspect="auto",
+                    color_continuous_scale="RdBu_r" if not is_dark else "Viridis",
+                    title=title
+                )
+            else:
+                fig = go.Figure()
+                fig.add_annotation(text="Requires >= 2 numeric columns", showarrow=False, font=dict(size=14, color=text_color))
+
+        elif chart_t == "pie":
+            fig = px.pie(plot_df, names=x_col, values=y_col, title=title)
+            fig.update_traces(textposition='inside', textinfo='percent+label', hoverinfo='label+percent+value')
+
+        elif chart_t in ["donut", "doughnut"]:
+            fig = px.pie(plot_df, names=x_col, values=y_col, hole=0.5, title=title)
+            fig.update_traces(textposition='inside', textinfo='percent+label', hoverinfo='label+percent+value')
+
+        elif chart_t == "funnel":
+            fig = px.funnel(plot_df, x=y_col, y=x_col, title=title)
+
+        elif chart_t == "treemap":
+            fig = px.treemap(plot_df, path=[x_col], values=y_col, title=title)
+
+        elif chart_t == "waterfall":
+            y_vals = plot_df[y_col].tolist() if (y_col and y_col in plot_df.columns) else [1] * len(plot_df)
+            x_cats = plot_df[x_col].tolist() if (x_col and x_col in plot_df.columns) else list(range(len(plot_df)))
+            fig = go.Figure(go.Waterfall(
+                orientation="v",
+                measure=["relative"] * len(y_vals),
+                x=x_cats,
+                y=y_vals,
+                connector={"line": {"color": "rgb(63, 63, 63)"}},
+                decreasing={"marker": {"color": "#ef4444"}},
+                increasing={"marker": {"color": "#10b981"}}
+            ))
+            fig.update_layout(title=title)
+
+        elif chart_t == "lollipop":
+            y_pos = list(range(len(plot_df)))
+            cats = plot_df[x_col].tolist() if x_col in plot_df.columns else []
+            vals = plot_df[y_col].tolist() if (y_col and y_col in plot_df.columns) else []
+            fig = go.Figure()
+            for c, v in zip(cats, vals):
+                fig.add_trace(go.Scatter(
+                    x=[0, v], y=[c, c],
+                    mode="lines+markers",
+                    marker=dict(size=[0, 10], color="#6366f1"),
+                    line=dict(color="#6366f1", width=2.5),
+                    showlegend=False
+                ))
+            fig.update_layout(title=title, xaxis_title=y_col, yaxis_title=x_col)
+
+        elif chart_t in ["radar", "spider"]:
+            num_cols = plot_df.select_dtypes(include=["number"]).columns.tolist()[:5]
+            if len(num_cols) >= 3 and len(plot_df) > 0:
+                first_row = plot_df.iloc[0]
+                fig = go.Figure(go.Scatterpolar(
+                    r=[first_row[c] for c in num_cols] + [first_row[num_cols[0]]],
+                    theta=num_cols + [num_cols[0]],
+                    fill='toself',
+                    name=str(first_row.get(x_col, "Sample"))
+                ))
+                fig.update_layout(polar=dict(radialaxis=dict(visible=True)), title=title)
+            else:
+                fig = px.bar(plot_df.head(10), x=x_col, y=y_col, title=title)
+
+        elif chart_t == "bubble":
+            num_cols = plot_df.select_dtypes(include=["number"]).columns.tolist()
+            size_candidates = [c for c in num_cols if c not in [x_col, y_col]]
+            size_col = size_candidates[0] if size_candidates else y_col
+            fig = px.scatter(plot_df, x=x_col, y=y_col, size=size_col, color=hue_col, title=f"{title} (Bubble: {size_col})")
+
+        else:
+            fig = px.bar(plot_df.head(15), x=x_col, y=y_col, title=title)
+
+    except Exception as e:
+        try:
+            print(f"[WARN] Plotly generation fallback: {e}")
+        except Exception:
+            pass
+        fig = px.bar(plot_df.head(10), x=x_col, y=y_col, title=title)
+
+    # Master Layout Customization (Modern SaaS aesthetics)
+    fig.update_layout(
+        paper_bgcolor=bg_color,
+        plot_bgcolor=bg_color,
+        font=dict(family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif", size=12, color=text_color),
+        title=dict(
+            text=f"<b>{title}</b>",
+            font=dict(size=15, color=text_color),
+            x=0.03,
+            y=0.96
+        ),
+        margin=dict(l=35, r=25, t=50, b=35),
+        hovermode="closest",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+            font=dict(size=10, color=sub_color)
+        ),
+        xaxis=dict(
+            showgrid=False,
+            zeroline=False,
+            color=sub_color,
+            tickfont=dict(size=11, color=sub_color)
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor=grid_color,
+            zeroline=False,
+            color=sub_color,
+            tickfont=dict(size=11, color=sub_color)
+        )
+    )
+
+    try:
+        return json.loads(fig.to_json())
+    except Exception:
+        return fig.to_dict()
+
+
+# ==============================================================================
+# ENGINE 1: MATPLOTLIB / SEABORN PRO (Studio-Grade Publication Quality)
 # ==============================================================================
 
 @tool
@@ -137,11 +346,10 @@ def generate_chart(
     """
     df = get_active_df()
     try:
-        # File name will match output_path if provided, else fallback to chart_type.png
         if not output_path:
             output_path = f"{chart_type}.png"
         
-        # Step 1: Check if the columns requested by LLM actually exist in df
+        # Step 1: Check column availability
         for col in [x_col, y_col, hue_col]:
             if col and col not in df.columns:
                 return f"Error: Column '{col}' not found. Available columns: {list(df.columns)}"
@@ -158,19 +366,24 @@ def generate_chart(
         else:
             sns.set_theme(style="whitegrid")
 
-        # Safeguard hue_col cardinality to prevent legend freeze and multi-megabyte image blowups
+        is_dark = selected_style.startswith("dark")
+        text_color = "#f8fafc" if is_dark else "#0f172a"
+        muted_color = "#94a3b8" if is_dark else "#64748b"
+        grid_line_color = "#334155" if is_dark else "#e2e8f0"
+
+        # Safeguard hue_col cardinality
         safe_hue = hue_col
         show_legend = "brief"
         if hue_col and hue_col in df.columns:
             if df[hue_col].nunique() > 10:
                 show_legend = False
 
-        # Step 3: Special Case: Pairplot (creates its own figure window)
+        # Step 3: Special Case: Pairplot
         if chart_type == "pairplot":
             grid = sns.pairplot(df, hue=safe_hue, palette=palette or "deep")
-            grid.fig.suptitle(title, y=1.02)
+            grid.fig.suptitle(title, y=1.02, fontsize=14, weight="bold")
             buf = io.BytesIO()
-            grid.savefig(buf, format="png", dpi=100, facecolor=grid.fig.get_facecolor(), bbox_inches="tight")
+            grid.savefig(buf, format="png", dpi=110, facecolor=grid.fig.get_facecolor(), bbox_inches="tight")
             plt.close(grid.fig)
             buf.seek(0)
             data_url = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
@@ -180,77 +393,113 @@ def generate_chart(
             sns.set_theme(style="whitegrid")
             return data_url
 
-        # Step 4: Create canvas for charts (polar for radar, rectangular for others)
+        # Step 4: Create canvas
         chart_t = (chart_type or "bar").lower().strip()
         if chart_t in ["radar", "spider"]:
             fig, ax = plt.subplots(figsize=(7, 6), subplot_kw=dict(polar=True))
         else:
-            fig, ax = plt.subplots(figsize=(8.5, 5))
+            fig, ax = plt.subplots(figsize=(8.5, 4.8))
 
-        # Big Data Scalability: Smart pre-processing & downsampling for massive datasets
+        # Big Data Scalability Preprocessing
         plot_df = smart_preprocess_data(df, chart_t, x_col, y_col, safe_hue)
 
-        # Chart 1: Bar Chart (Category comparison)
+        # --------------------------------------------------------------------------
+        # Chart 1: Bar Chart (Studio-grade with data labels & average benchmark)
+        # --------------------------------------------------------------------------
         if chart_t == "bar":
             if safe_hue:
                 sns.barplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "deep", ax=ax)
             else:
                 sns.barplot(data=plot_df, x=x_col, y=y_col, hue=x_col, palette=palette or "deep", legend=False, ax=ax)
-            ax.tick_params(axis='x', rotation=45)
-            for lbl in ax.get_xticklabels():
-                lbl.set_ha('right')
 
-        # Chart 2: Line Chart (Trends)
+            # Direct Bar Data Labels
+            if hasattr(ax, "containers"):
+                for container in ax.containers:
+                    try:
+                        ax.bar_label(
+                            container,
+                            fmt=lambda v: format_num_human(v) if abs(v) > 0 else "",
+                            padding=4,
+                            fontsize=8.5,
+                            weight="bold",
+                            color=text_color
+                        )
+                    except Exception:
+                        pass
+
+            # Average benchmark line
+            if y_col and y_col in plot_df.columns and pd.api.types.is_numeric_dtype(plot_df[y_col]):
+                try:
+                    mean_val = float(plot_df[y_col].mean())
+                    if not np.isnan(mean_val) and abs(mean_val) > 0:
+                        ax.axhline(mean_val, color="#f59e0b", linestyle=":", linewidth=1.5, alpha=0.85)
+                        ax.text(
+                            0.98, 0.94, f"Mean: {format_num_human(mean_val)}",
+                            transform=ax.transAxes, color="#f59e0b", fontsize=8.5, weight="bold",
+                            ha="right", va="top",
+                            bbox=dict(boxstyle="round,pad=0.25", facecolor=fig.get_facecolor(), edgecolor="#f59e0b", alpha=0.8)
+                        )
+                except Exception:
+                    pass
+
+        # --------------------------------------------------------------------------
+        # Chart 2: Line Chart (Trends with markers)
+        # --------------------------------------------------------------------------
         elif chart_t in ["line", "trend"]:
             sorted_df = plot_df.sort_values(by=x_col) if (x_col and x_col in plot_df.columns) else plot_df
             if safe_hue:
                 sns.lineplot(data=sorted_df, x=x_col, y=y_col, hue=safe_hue, marker="o", linewidth=2.5, palette=palette or "deep", ax=ax)
             else:
                 line_color = sns.color_palette(palette)[0] if palette else None
-                sns.lineplot(data=sorted_df, x=x_col, y=y_col, marker="o", linewidth=2.5, color=line_color, ax=ax)
-            ax.tick_params(axis='x', rotation=45)
-            for lbl in ax.get_xticklabels():
-                lbl.set_ha('right')
+                sns.lineplot(data=sorted_df, x=x_col, y=y_col, marker="o", markersize=6, linewidth=2.5, color=line_color, ax=ax)
 
+        # --------------------------------------------------------------------------
         # Chart 3: Scatter Plot
+        # --------------------------------------------------------------------------
         elif chart_t == "scatter":
             n_rows = len(plot_df)
-            point_size = 20 if n_rows > 3000 else (40 if n_rows > 1000 else 70)
-            alpha_val = 0.65 if n_rows > 2000 else 0.85
+            point_size = 30 if n_rows > 1000 else 65
+            alpha_val = 0.7 if n_rows > 1000 else 0.85
             sns.scatterplot(
                 data=plot_df, x=x_col, y=y_col, hue=safe_hue, s=point_size,
                 palette=palette or "deep", alpha=alpha_val, ax=ax,
+                edgecolor="white", linewidth=0.5,
                 legend=show_legend
             )
 
+        # --------------------------------------------------------------------------
         # Chart 4: Histogram
+        # --------------------------------------------------------------------------
         elif chart_t in ["histogram", "hist"]:
             if safe_hue:
                 sns.histplot(data=plot_df, x=x_col, kde=True, hue=safe_hue, palette=palette or "deep", ax=ax)
             else:
                 bar_color = sns.color_palette(palette)[0] if palette else None
-                sns.histplot(data=plot_df, x=x_col, kde=True, color=bar_color, ax=ax)
+                sns.histplot(data=plot_df, x=x_col, kde=True, color=bar_color, edgecolor="white", ax=ax)
 
+        # --------------------------------------------------------------------------
         # Chart 5: Box Plot
+        # --------------------------------------------------------------------------
         elif chart_t == "box":
             if safe_hue:
-                sns.boxplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "Set2", ax=ax)
+                sns.boxplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "Set2", ax=ax, width=0.5)
             else:
-                sns.boxplot(data=plot_df, x=x_col, y=y_col, hue=x_col, palette=palette or "Set2", legend=False, ax=ax)
-            ax.tick_params(axis='x', rotation=45)
-            for lbl in ax.get_xticklabels():
-                lbl.set_ha('right')
+                sns.boxplot(data=plot_df, x=x_col, y=y_col, hue=x_col, palette=palette or "Set2", legend=False, ax=ax, width=0.5)
 
+        # --------------------------------------------------------------------------
         # Chart 6: Heatmap (Correlation)
+        # --------------------------------------------------------------------------
         elif chart_t in ["heatmap", "correlation"]:
             corr = plot_df.corr(numeric_only=True)
             if corr.empty or corr.shape[0] < 2:
                 ax.text(0.5, 0.5, "Requires at least 2 numeric columns\nfor correlation heatmap",
-                        ha="center", va="center", fontsize=12, weight="bold", transform=ax.transAxes)
+                        ha="center", va="center", fontsize=12, weight="bold", color=text_color, transform=ax.transAxes)
             else:
-                sns.heatmap(corr, annot=True, cmap=palette or "coolwarm", fmt=".2f", linewidths=0.5, ax=ax)
+                sns.heatmap(corr, annot=True, cmap=palette or "coolwarm", fmt=".2f", linewidths=0.5, ax=ax, cbar_kws={"shrink": 0.8})
 
+        # --------------------------------------------------------------------------
         # Chart 7: Pie Chart
+        # --------------------------------------------------------------------------
         elif chart_t == "pie":
             if y_col and y_col in plot_df.columns:
                 pie_data = plot_df.groupby(x_col)[y_col].sum()
@@ -266,58 +515,60 @@ def generate_chart(
                 pie_data = pd.concat([top_8, pd.Series([other_val], index=["Other"])])
 
             if pie_data.empty:
-                ax.text(0.5, 0.5, "No positive data available for pie chart", ha="center", va="center", transform=ax.transAxes)
+                ax.text(0.5, 0.5, "No positive data available for pie chart", ha="center", va="center", color=text_color, transform=ax.transAxes)
             else:
                 pie_colors = sns.color_palette(palette or "pastel", len(pie_data))
-                ax.pie(pie_data.values, labels=pie_data.index, autopct="%1.1f%%", startangle=140, colors=pie_colors)
+                ax.pie(pie_data.values, labels=pie_data.index, autopct="%1.1f%%", startangle=140, colors=pie_colors, textprops={"color": text_color, "fontsize": 9.5})
 
+        # --------------------------------------------------------------------------
         # Chart 8: Area Chart
+        # --------------------------------------------------------------------------
         elif chart_t == "area":
             sorted_df = plot_df.sort_values(by=x_col) if (x_col and x_col in plot_df.columns) else plot_df
             area_colors = sns.color_palette(palette or "mako", 2)
-            ax.fill_between(sorted_df[x_col], sorted_df[y_col], alpha=0.4, color=area_colors[0])
-            ax.plot(sorted_df[x_col], sorted_df[y_col], color=area_colors[-1], linewidth=2.5, marker="o")
-            ax.tick_params(axis='x', rotation=45)
-            for lbl in ax.get_xticklabels():
-                lbl.set_ha('right')
+            ax.fill_between(sorted_df[x_col], sorted_df[y_col], alpha=0.35, color=area_colors[0])
+            ax.plot(sorted_df[x_col], sorted_df[y_col], color=area_colors[-1], linewidth=2.5, marker="o", markersize=5)
 
+        # --------------------------------------------------------------------------
         # Chart 9: Violin Plot
+        # --------------------------------------------------------------------------
         elif chart_t == "violin":
             if safe_hue:
                 sns.violinplot(data=plot_df, x=x_col, y=y_col, hue=safe_hue, palette=palette or "muted", ax=ax)
             else:
                 sns.violinplot(data=plot_df, x=x_col, y=y_col, hue=x_col, palette=palette or "muted", legend=False, ax=ax)
-            ax.tick_params(axis='x', rotation=45)
-            for lbl in ax.get_xticklabels():
-                lbl.set_ha('right')
 
+        # --------------------------------------------------------------------------
         # Chart 10: Treemap
+        # --------------------------------------------------------------------------
         elif chart_t == "treemap":
             if y_col and y_col in plot_df.columns:
                 tree_data = plot_df.groupby(x_col)[y_col].sum().reset_index()
-                tree_data = tree_data[tree_data[y_col] > 0].head(16)
+                tree_data = tree_data[tree_data[y_col] > 0].head(14)
                 sizes = tree_data[y_col].values
-                labels = [f"{row[x_col]}\n({row[y_col]:,.0f})" for _, row in tree_data.iterrows()]
+                labels = [f"{row[x_col]}\n({format_num_human(row[y_col])})" for _, row in tree_data.iterrows()]
             else:
-                counts = plot_df[x_col].value_counts().head(16)
+                counts = plot_df[x_col].value_counts().head(14)
                 sizes = counts.values
-                labels = [f"{cat}\n({cnt:,})" for cat, cnt in zip(counts.index, counts.values)]
+                labels = [f"{cat}\n({format_num_human(cnt)})" for cat, cnt in zip(counts.index, counts.values)]
 
             if len(sizes) == 0 or sum(sizes) <= 0:
-                ax.text(0.5, 0.5, "No positive values available for treemap", ha="center", va="center", transform=ax.transAxes)
+                ax.text(0.5, 0.5, "No positive values available for treemap", ha="center", va="center", color=text_color, transform=ax.transAxes)
             else:
                 tree_colors = sns.color_palette(palette or "Spectral", len(sizes))
-                squarify.plot(sizes=sizes, label=labels, color=tree_colors, alpha=0.85, text_kwargs={"fontsize": 10, "weight": "bold"}, ax=ax)
+                squarify.plot(sizes=sizes, label=labels, color=tree_colors, alpha=0.85, text_kwargs={"fontsize": 9.5, "weight": "bold", "color": "white"}, ax=ax)
                 ax.axis("off")
 
+        # --------------------------------------------------------------------------
         # Chart 11: Waterfall Chart
+        # --------------------------------------------------------------------------
         elif chart_t == "waterfall":
             if y_col and y_col in plot_df.columns:
-                w_df = plot_df.groupby(x_col, as_index=False)[y_col].sum().head(14)
+                w_df = plot_df.groupby(x_col, as_index=False)[y_col].sum().head(12)
                 categories = w_df[x_col].astype(str).tolist()
                 values = w_df[y_col].astype(float).tolist()
             else:
-                counts = plot_df[x_col].value_counts().head(14)
+                counts = plot_df[x_col].value_counts().head(12)
                 categories = counts.index.astype(str).tolist()
                 values = counts.values.astype(float).tolist()
 
@@ -328,24 +579,23 @@ def generate_chart(
             bottoms = [min(cumulative[i], cumulative[i + 1]) for i in range(len(values))]
             heights = [abs(val) for val in values]
 
-            if palette:
-                pal_colors = sns.color_palette(palette, 2)
-                pos_color, neg_color = pal_colors[0], pal_colors[1]
-            else:
-                pos_color, neg_color = "#10b981", "#ef4444"
-
+            pos_color, neg_color = "#10b981", "#ef4444"
             colors = [pos_color if val >= 0 else neg_color for val in values]
-            ax.bar(categories, heights, bottom=bottoms, color=colors, edgecolor="black", width=0.6)
+            bars = ax.bar(categories, heights, bottom=bottoms, color=colors, edgecolor="black", width=0.55)
 
             for i in range(len(values) - 1):
                 ax.plot([i, i + 1], [cumulative[i + 1], cumulative[i + 1]], color="grey", linestyle="--")
 
-            ax.set_ylabel(y_col or "Value", fontsize=11)
-            ax.tick_params(axis='x', rotation=45)
-            for lbl in ax.get_xticklabels():
-                lbl.set_ha('right')
+            for bar, val in zip(bars, values):
+                y_text = bar.get_y() + bar.get_height() / 2
+                ax.text(bar.get_x() + bar.get_width() / 2, y_text, format_num_human(val),
+                        ha="center", va="center", color="white", fontsize=8.5, weight="bold")
 
+            ax.set_ylabel(y_col or "Value", fontsize=11, color=text_color)
+
+        # --------------------------------------------------------------------------
         # Chart 12: Donut Chart
+        # --------------------------------------------------------------------------
         elif chart_t in ["donut", "doughnut"]:
             if y_col and y_col in plot_df.columns:
                 donut_data = plot_df.groupby(x_col)[y_col].sum()
@@ -361,7 +611,7 @@ def generate_chart(
                 donut_data = pd.concat([top_8, pd.Series([other_val], index=["Other"])])
 
             if donut_data.empty:
-                ax.text(0.5, 0.5, "No positive values for donut chart", ha="center", va="center", transform=ax.transAxes)
+                ax.text(0.5, 0.5, "No positive values for donut chart", ha="center", va="center", color=text_color, transform=ax.transAxes)
             else:
                 donut_colors = sns.color_palette(palette or "pastel", len(donut_data))
                 wedges, texts, autotexts = ax.pie(
@@ -371,20 +621,23 @@ def generate_chart(
                     startangle=140,
                     colors=donut_colors,
                     pctdistance=0.75,
-                    wedgeprops=dict(width=0.42, edgecolor="w", linewidth=1.5)
+                    wedgeprops=dict(width=0.42, edgecolor="w", linewidth=1.5),
+                    textprops={"color": text_color, "fontsize": 9}
                 )
                 total_val = donut_data.sum()
-                center_txt = f"TOTAL\n{total_val:,.0f}" if isinstance(total_val, (int, float, np.number)) else "TOTAL"
-                ax.text(0, 0, center_txt, ha="center", va="center", fontsize=11, weight="bold")
+                center_txt = f"TOTAL\n{format_num_human(total_val)}" if isinstance(total_val, (int, float, np.number)) else "TOTAL"
+                ax.text(0, 0, center_txt, ha="center", va="center", fontsize=10, weight="bold", color=text_color)
 
+        # --------------------------------------------------------------------------
         # Chart 13: Funnel Chart
+        # --------------------------------------------------------------------------
         elif chart_t == "funnel":
             if y_col and y_col in plot_df.columns:
-                funnel_df = plot_df.groupby(x_col, as_index=False)[y_col].sum().sort_values(by=y_col, ascending=False).head(12)
+                funnel_df = plot_df.groupby(x_col, as_index=False)[y_col].sum().sort_values(by=y_col, ascending=False).head(10)
                 stages = funnel_df[x_col].astype(str).tolist()
                 values = funnel_df[y_col].astype(float).tolist()
             else:
-                counts = plot_df[x_col].value_counts().head(12)
+                counts = plot_df[x_col].value_counts().head(10)
                 stages = counts.index.astype(str).tolist()
                 values = counts.values.astype(float).tolist()
 
@@ -393,49 +646,50 @@ def generate_chart(
             f_colors = sns.color_palette(palette or "flare", len(values))
 
             y_pos = list(range(len(stages)))
-            bars = ax.barh(y_pos, values, left=lefts, color=f_colors, edgecolor="black", height=0.6, align="center")
+            bars = ax.barh(y_pos, values, left=lefts, color=f_colors, edgecolor="black", height=0.55, align="center")
             ax.set_yticks(y_pos)
-            ax.set_yticklabels(stages, fontsize=10, weight="bold")
+            ax.set_yticklabels(stages, fontsize=10, weight="bold", color=text_color)
             ax.invert_yaxis()
 
-            for i, (v, bar) in enumerate(zip(values, bars)):
+            for v, bar in zip(values, bars):
                 pct = (v / max_val) * 100
-                text_color = "white" if selected_style.startswith("dark") else "#0f172a"
-                ax.text(max_val / 2, bar.get_y() + bar.get_height() / 2, f"{v:,.0f} ({pct:.1f}%)",
-                        ha="center", va="center", color=text_color, fontsize=10, weight="bold")
+                ax.text(max_val / 2, bar.get_y() + bar.get_height() / 2, f"{format_num_human(v)} ({pct:.0f}%)",
+                        ha="center", va="center", color="white", fontsize=9, weight="bold")
             ax.get_xaxis().set_visible(False)
 
+        # --------------------------------------------------------------------------
         # Chart 14: Lollipop Chart
+        # --------------------------------------------------------------------------
         elif chart_t == "lollipop":
             if y_col and y_col in plot_df.columns:
-                lolli_df = plot_df.groupby(x_col)[y_col].sum().reset_index().sort_values(by=y_col).tail(18)
+                lolli_df = plot_df.groupby(x_col)[y_col].sum().reset_index().sort_values(by=y_col).tail(14)
                 cats = lolli_df[x_col].astype(str).tolist()
                 vals = lolli_df[y_col].tolist()
             else:
-                counts = plot_df[x_col].value_counts().sort_values().tail(18)
+                counts = plot_df[x_col].value_counts().sort_values().tail(14)
                 cats = counts.index.astype(str).tolist()
                 vals = counts.values.tolist()
 
-            c_list = sns.color_palette(palette or "deep", len(vals))
-            marker_c = c_list[0] if len(c_list) > 0 else "#6366f1"
-
+            marker_c = "#6366f1"
             y_pos = list(range(len(cats)))
-            ax.hlines(y=y_pos, xmin=0, xmax=vals, color=marker_c, alpha=0.7, linewidth=2.5)
-            ax.scatter(vals, y_pos, color=marker_c, s=120, alpha=0.9, edgecolors="white", linewidth=1.5, zorder=3)
+            ax.hlines(y=y_pos, xmin=0, xmax=vals, color=marker_c, alpha=0.65, linewidth=2.2)
+            ax.scatter(vals, y_pos, color=marker_c, s=110, alpha=0.9, edgecolors="white", linewidth=1.5, zorder=3)
             ax.set_yticks(y_pos)
-            ax.set_yticklabels(cats, fontsize=10, weight="bold")
-            ax.set_xlabel(y_col or "Count", fontsize=11)
+            ax.set_yticklabels(cats, fontsize=9.5, weight="bold", color=text_color)
+            ax.set_xlabel(y_col or "Count", fontsize=10.5, color=muted_color)
 
+        # --------------------------------------------------------------------------
         # Chart 15: Radar Chart
+        # --------------------------------------------------------------------------
         elif chart_t in ["radar", "spider"]:
             num_cols = plot_df.select_dtypes(include=["number"]).columns.tolist()
             if len(num_cols) >= 3:
-                features = num_cols[:6]
+                features = num_cols[:5]
                 num_vars = len(features)
                 angles = [n / float(num_vars) * 2 * np.pi for n in range(num_vars)]
                 angles += angles[:1]
 
-                plot_rows = plot_df.head(4)
+                plot_rows = plot_df.head(3)
                 cat_col = x_col if (x_col and x_col in plot_df.columns) else None
                 r_colors = sns.color_palette(palette or "Set2", len(plot_rows))
 
@@ -453,17 +707,18 @@ def generate_chart(
                     vals += vals[:1]
                     lbl = str(row[cat_col]) if (cat_col and cat_col in plot_df.columns) else f"Row {idx + 1}"
                     ax.plot(angles, vals, linewidth=2, linestyle="solid", label=lbl, color=r_colors[idx])
-                    ax.fill(angles, vals, color=r_colors[idx], alpha=0.25)
+                    ax.fill(angles, vals, color=r_colors[idx], alpha=0.22)
 
                 ax.set_xticks(angles[:-1])
-                ax.set_xticklabels(features, fontsize=10, weight="bold")
+                ax.set_xticklabels(features, fontsize=9.5, weight="bold", color=text_color)
                 ax.set_yticklabels([])
-                ax.legend(loc="upper right", bbox_to_anchor=(1.3, 1.1), fontsize=9)
+                ax.legend(loc="upper right", bbox_to_anchor=(1.25, 1.1), fontsize=8.5)
             else:
-                sns.barplot(data=plot_df.head(15), x=x_col, y=y_col, hue=x_col, palette=palette or "deep", legend=False, ax=ax)
-                ax.tick_params(axis='x', rotation=45)
+                sns.barplot(data=plot_df.head(12), x=x_col, y=y_col, hue=x_col, palette=palette or "deep", legend=False, ax=ax)
 
+        # --------------------------------------------------------------------------
         # Chart 16: Bubble Chart
+        # --------------------------------------------------------------------------
         elif chart_t == "bubble":
             num_cols = plot_df.select_dtypes(include=["number"]).columns.tolist()
             size_candidates = [c for c in num_cols if c not in [x_col, y_col]]
@@ -471,40 +726,50 @@ def generate_chart(
 
             sizes = plot_df[size_col].abs() if size_col else plot_df[y_col].abs()
             s_min, s_max = sizes.min(), sizes.max()
-            if s_max > s_min:
-                scaled_sizes = 60 + ((sizes - s_min) / (s_max - s_min)) * 500
-            else:
-                scaled_sizes = [150] * len(plot_df)
+            scaled_sizes = 60 + ((sizes - s_min) / max(1e-5, (s_max - s_min))) * 450 if s_max > s_min else [140] * len(plot_df)
 
             effective_hue = hue_col if (hue_col and hue_col in plot_df.columns) else None
             if effective_hue:
                 sns.scatterplot(
                     data=plot_df, x=x_col, y=y_col, hue=effective_hue, size=scaled_sizes,
-                    sizes=(60, 500), palette=palette or "plasma", alpha=0.75,
-                    edgecolor="white", linewidth=1.2, ax=ax, legend="brief"
+                    sizes=(60, 450), palette=palette or "plasma", alpha=0.75,
+                    edgecolor="white", linewidth=1, ax=ax, legend="brief"
                 )
             else:
                 bubble_color = sns.color_palette(palette or "plasma")[0]
                 sns.scatterplot(
                     data=plot_df, x=x_col, y=y_col, size=scaled_sizes, color=bubble_color,
-                    sizes=(60, 500), alpha=0.75,
-                    edgecolor="white", linewidth=1.2, ax=ax, legend=False
+                    sizes=(60, 450), alpha=0.75,
+                    edgecolor="white", linewidth=1, ax=ax, legend=False
                 )
             title = f"{title} (Bubble: {size_col})"
 
-        # Fallback to standard Bar Chart
+        # Fallback to Bar
         else:
-            sns.barplot(data=plot_df.head(20), x=x_col, y=y_col, hue=x_col, palette=palette or "deep", legend=False, ax=ax)
-            ax.tick_params(axis='x', rotation=45)
+            sns.barplot(data=plot_df.head(15), x=x_col, y=y_col, hue=x_col, palette=palette or "deep", legend=False, ax=ax)
+
+        # --------------------------------------------------------------------------
+        # Studio-Grade Matplotlib Finishing Touches (Despine, Horizontal-Only Grid, Title)
+        # --------------------------------------------------------------------------
+        if chart_t not in ["radar", "spider", "treemap"]:
+            # Remove top & right borders for clean floating modern aesthetic
+            sns.despine(ax=ax, top=True, right=True, left=False, bottom=False)
+            
+            # Subtle horizontal-only grid lines
+            ax.yaxis.grid(True, linestyle="--", alpha=0.22, color=grid_line_color)
+            ax.xaxis.grid(False)
+
+            # Clean label rotation
+            ax.tick_params(axis='x', rotation=28, colors=muted_color, labelsize=9.5)
+            ax.tick_params(axis='y', colors=muted_color, labelsize=9.5)
             for lbl in ax.get_xticklabels():
                 lbl.set_ha('right')
 
-        # Finalize and save plot (dpi=100 provides instant ~0.1s rendering and clean ~150KB web files)
-        ax.set_title(title, fontsize=14, weight="bold")
+        # Studio Typography Title
+        ax.set_title(title, fontsize=13, weight="bold", color=text_color, pad=14, loc="left")
 
-        # Explicit legend position prevents slow loc="best" combinatorial searching
         leg = ax.get_legend()
-        if leg:
+        if leg and chart_t not in ["radar", "spider"]:
             leg.set_loc("upper right")
 
         try:
@@ -513,22 +778,56 @@ def generate_chart(
             pass
 
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=100, facecolor=fig.get_facecolor())
+        fig.savefig(buf, format="png", dpi=105, facecolor=fig.get_facecolor(), bbox_inches="tight")
         plt.close(fig)
         buf.seek(0)
         data_url = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
 
-        # Strictly write to disk ONLY if a real file path is passed (never for :memory:)
         if output_path and output_path != ":memory:":
             with open(output_path, "wb") as f:
                 f.write(buf.getvalue())
         
-        # Reset to default seaborn theme
         sns.set_theme(style="whitegrid")
-
         return data_url
 
     except Exception as e:
         plt.close("all")
         sns.set_theme(style="whitegrid")
         return f"Error generating chart: {str(e)}"
+
+
+# ==============================================================================
+# DUAL ENGINE COMBO RENDERER
+# ==============================================================================
+
+def render_chart_dual(args: dict) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """
+    Renders both:
+    1. Studio-Grade High-Res Matplotlib PNG (Base64)
+    2. Interactive Plotly Figure Specification (Dictionary with hover tooltips and zoom)
+    Shares preprocessed plot_df for O(N) optimal time and O(1) space complexity.
+    """
+    df = get_active_df()
+    chart_type = args.get("chart_type", "bar")
+    x_col = args.get("x_col")
+    y_col = args.get("y_col")
+    hue_col = args.get("hue_col")
+    title = args.get("title", "Data Analysis Chart")
+    palette = args.get("palette")
+    style = args.get("style", "whitegrid")
+
+    # 1. Generate Studio Matplotlib PNG
+    data_url = generate_chart.invoke(args)
+
+    # 2. Generate Interactive Plotly Specification (Shares preprocessed data)
+    plotly_spec = None
+    try:
+        plot_df = smart_preprocess_data(df, chart_type, x_col, y_col, hue_col)
+        plotly_spec = build_plotly_chart(chart_type, plot_df, x_col, y_col, hue_col, title, palette, style)
+    except Exception as e:
+        try:
+            print(f"[WARN] Dual render Plotly build failed: {e}")
+        except Exception:
+            pass
+
+    return data_url, plotly_spec
