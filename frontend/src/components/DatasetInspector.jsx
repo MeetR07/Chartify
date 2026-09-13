@@ -56,24 +56,6 @@ export default function DatasetInspector({
             </div>
           </div>
 
-          {/* Column Tags (Clickable to insert into query) */}
-          <div className="columns-tags" title="Click any column name to add to your query">
-            {dataset.columns.map((col) => {
-              const isNum = dataset.numeric_columns.includes(col);
-              return (
-                <button
-                  key={col}
-                  type="button"
-                  onClick={() => onColumnClick && onColumnClick(col)}
-                  className={`col-tag ${isNum ? 'num' : 'str'}`}
-                  title={`Click to use '${col}' in prompt (${isNum ? 'numeric' : 'categorical'})`}
-                >
-                  <span className="col-name">{col}</span>
-                  <span className="col-kind">{isNum ? 'num' : 'str'}</span>
-                </button>
-              );
-            })}
-          </div>
 
           {/* Data Table Preview */}
           <div className="table-wrapper">
