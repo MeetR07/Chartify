@@ -125,9 +125,9 @@ LLM_CACHE = ScalableLRUCache(maxsize=500, ttl_seconds=3600)
 RENDER_LOCK = threading.Lock()
 
 def render_chart_safe(args):
-    """Thread-safe dual renderer (Studio Matplotlib PNG + Interactive Plotly Dict)."""
+    """Thread-safe renderer for Studio Matplotlib PNG."""
     with RENDER_LOCK:
-        return charts.render_chart_dual(args)
+        return charts.generate_chart.invoke(args)
 
 
 @app.get("/api/health")
@@ -220,7 +220,7 @@ async def generate_chart_endpoint(req: QueryRequest):
                 args["palette"] = req.palette
 
             args["output_path"] = ":memory:"
-            data_url, plotly_spec = await asyncio.to_thread(render_chart_safe, args)
+            data_url = await asyncio.to_thread(render_chart_safe, args)
             return {
                 "success": True,
                 "tool_called": True,
@@ -229,8 +229,6 @@ async def generate_chart_endpoint(req: QueryRequest):
                 "result": "Rendered in-memory",
                 "chart_filename": f"{args.get('chart_type', 'chart')}.png",
                 "chart_url": data_url,
-                "interactive_spec": plotly_spec,
-                "has_interactive": bool(plotly_spec is not None),
                 "tokens": cached_data.get("tokens", {"total": 0, "input": 0, "output": 0})
             }
 
@@ -290,7 +288,7 @@ async def generate_chart_endpoint(req: QueryRequest):
 
         args["output_path"] = ":memory:"
         # Render chart purely in-memory in a background thread (event loop never freezes)
-        data_url, plotly_spec = await asyncio.to_thread(render_chart_safe, args)
+        data_url = await asyncio.to_thread(render_chart_safe, args)
 
         # Self-healing fallback: If LLM generated bad args, instantly recover via heuristic
         if isinstance(data_url, str) and data_url.startswith("Error generating chart:"):
@@ -304,7 +302,7 @@ async def generate_chart_endpoint(req: QueryRequest):
             if req.palette:
                 args["palette"] = req.palette
             args["output_path"] = ":memory:"
-            data_url, plotly_spec = await asyncio.to_thread(render_chart_safe, args)
+            data_url = await asyncio.to_thread(render_chart_safe, args)
             tokens_info["model"] = f"{tokens_info.get('model', 'ai')}_self_healed"
 
         return {
@@ -315,8 +313,6 @@ async def generate_chart_endpoint(req: QueryRequest):
             "result": "Rendered in-memory",
             "chart_filename": f"{args.get('chart_type', 'chart')}.png",
             "chart_url": data_url,
-            "interactive_spec": plotly_spec,
-            "has_interactive": bool(plotly_spec is not None),
             "tokens": tokens_info
         }
 
@@ -341,13 +337,11 @@ async def apply_style_endpoint(req: StyleRequest):
             "output_path": ":memory:"
         }
         # Restyle chart purely in-memory in a non-blocking worker thread
-        data_url, plotly_spec = await asyncio.to_thread(render_chart_safe, args)
+        data_url = await asyncio.to_thread(render_chart_safe, args)
         return {
             "success": True,
             "chart_type": req.chart_type,
             "chart_url": data_url,
-            "interactive_spec": plotly_spec,
-            "has_interactive": bool(plotly_spec is not None),
             "tool_args": args,
             "result": "Restyled in-memory"
         }

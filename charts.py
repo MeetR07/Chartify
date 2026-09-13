@@ -3,7 +3,7 @@ import io
 import sys
 import json
 import base64
-from typing import Literal, Optional, Tuple, Dict, Any
+from typing import Literal, Optional, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -12,9 +12,6 @@ matplotlib.use("Agg")  # Use non-interactive, thread-safe Agg backend for server
 import matplotlib.pyplot as plt
 import seaborn as sns
 import squarify
-
-import plotly.express as px
-import plotly.graph_objects as go
 
 from langchain_core.tools import tool
 
@@ -130,195 +127,7 @@ def smart_preprocess_data(data: pd.DataFrame, chart_type: str, x_col: Optional[s
 
 
 # ==============================================================================
-# ENGINE 2: INTERACTIVE PLOTLY WEB ENGINE (Sub-50ms JSON Delivery)
-# ==============================================================================
-
-def build_plotly_chart(
-    chart_type: str,
-    plot_df: pd.DataFrame,
-    x_col: Optional[str] = None,
-    y_col: Optional[str] = None,
-    hue_col: Optional[str] = None,
-    title: str = "Data Analysis Chart",
-    palette: Optional[str] = None,
-    style: Optional[str] = "whitegrid"
-) -> Dict[str, Any]:
-    """
-    Constructs an interactive, high-performance Plotly figure dictionary.
-    Supports hover inspection, interactive zooming, panning, and legend toggling.
-    """
-    chart_t = (chart_type or "bar").lower().strip()
-    is_dark = str(style).startswith("dark") or str(style) in ["dark", "darkgrid"]
-
-    # Elegant theme styling
-    bg_color = "rgba(0,0,0,0)"
-    grid_color = "rgba(255,255,255,0.08)" if is_dark else "rgba(0,0,0,0.06)"
-    text_color = "#f8fafc" if is_dark else "#0f172a"
-    sub_color = "#94a3b8" if is_dark else "#64748b"
-
-    fig = None
-    try:
-        if chart_t == "bar":
-            fig = px.bar(plot_df, x=x_col, y=y_col, color=hue_col, title=title)
-            if not hue_col and x_col and y_col and y_col in plot_df.columns:
-                fig.update_traces(
-                    hovertemplate="<b>%{x}</b><br>Value: %{y:,.2f}<extra></extra>",
-                    marker_line_width=0
-                )
-
-        elif chart_t in ["line", "trend"]:
-            sorted_df = plot_df.sort_values(by=x_col) if (x_col and x_col in plot_df.columns) else plot_df
-            fig = px.line(sorted_df, x=x_col, y=y_col, color=hue_col, markers=True, title=title)
-            fig.update_traces(line=dict(width=2.5), marker=dict(size=6))
-
-        elif chart_t == "scatter":
-            fig = px.scatter(plot_df, x=x_col, y=y_col, color=hue_col, title=title)
-            fig.update_traces(marker=dict(size=7, opacity=0.8, line=dict(width=0.5, color="white")))
-
-        elif chart_t in ["histogram", "hist"]:
-            fig = px.histogram(plot_df, x=x_col, color=hue_col, title=title, marginal="box")
-
-        elif chart_t == "box":
-            fig = px.box(plot_df, x=x_col, y=y_col, color=hue_col, title=title)
-
-        elif chart_t == "violin":
-            fig = px.violin(plot_df, x=x_col, y=y_col, color=hue_col, box=True, points="outliers", title=title)
-
-        elif chart_t == "area":
-            sorted_df = plot_df.sort_values(by=x_col) if (x_col and x_col in plot_df.columns) else plot_df
-            fig = px.area(sorted_df, x=x_col, y=y_col, color=hue_col, title=title)
-
-        elif chart_t in ["heatmap", "correlation"]:
-            corr = plot_df.corr(numeric_only=True)
-            if not corr.empty and corr.shape[0] >= 2:
-                fig = px.imshow(
-                    corr.round(2),
-                    text_auto=True,
-                    aspect="auto",
-                    color_continuous_scale="RdBu_r" if not is_dark else "Viridis",
-                    title=title
-                )
-            else:
-                fig = go.Figure()
-                fig.add_annotation(text="Requires >= 2 numeric columns", showarrow=False, font=dict(size=14, color=text_color))
-
-        elif chart_t == "pie":
-            fig = px.pie(plot_df, names=x_col, values=y_col, title=title)
-            fig.update_traces(textposition='inside', textinfo='percent+label', hoverinfo='label+percent+value')
-
-        elif chart_t in ["donut", "doughnut"]:
-            fig = px.pie(plot_df, names=x_col, values=y_col, hole=0.5, title=title)
-            fig.update_traces(textposition='inside', textinfo='percent+label', hoverinfo='label+percent+value')
-
-        elif chart_t == "funnel":
-            fig = px.funnel(plot_df, x=y_col, y=x_col, title=title)
-
-        elif chart_t == "treemap":
-            fig = px.treemap(plot_df, path=[x_col], values=y_col, title=title)
-
-        elif chart_t == "waterfall":
-            y_vals = plot_df[y_col].tolist() if (y_col and y_col in plot_df.columns) else [1] * len(plot_df)
-            x_cats = plot_df[x_col].tolist() if (x_col and x_col in plot_df.columns) else list(range(len(plot_df)))
-            fig = go.Figure(go.Waterfall(
-                orientation="v",
-                measure=["relative"] * len(y_vals),
-                x=x_cats,
-                y=y_vals,
-                connector={"line": {"color": "rgb(63, 63, 63)"}},
-                decreasing={"marker": {"color": "#ef4444"}},
-                increasing={"marker": {"color": "#10b981"}}
-            ))
-            fig.update_layout(title=title)
-
-        elif chart_t == "lollipop":
-            y_pos = list(range(len(plot_df)))
-            cats = plot_df[x_col].tolist() if x_col in plot_df.columns else []
-            vals = plot_df[y_col].tolist() if (y_col and y_col in plot_df.columns) else []
-            fig = go.Figure()
-            for c, v in zip(cats, vals):
-                fig.add_trace(go.Scatter(
-                    x=[0, v], y=[c, c],
-                    mode="lines+markers",
-                    marker=dict(size=[0, 10], color="#6366f1"),
-                    line=dict(color="#6366f1", width=2.5),
-                    showlegend=False
-                ))
-            fig.update_layout(title=title, xaxis_title=y_col, yaxis_title=x_col)
-
-        elif chart_t in ["radar", "spider"]:
-            num_cols = plot_df.select_dtypes(include=["number"]).columns.tolist()[:5]
-            if len(num_cols) >= 3 and len(plot_df) > 0:
-                first_row = plot_df.iloc[0]
-                fig = go.Figure(go.Scatterpolar(
-                    r=[first_row[c] for c in num_cols] + [first_row[num_cols[0]]],
-                    theta=num_cols + [num_cols[0]],
-                    fill='toself',
-                    name=str(first_row.get(x_col, "Sample"))
-                ))
-                fig.update_layout(polar=dict(radialaxis=dict(visible=True)), title=title)
-            else:
-                fig = px.bar(plot_df.head(10), x=x_col, y=y_col, title=title)
-
-        elif chart_t == "bubble":
-            num_cols = plot_df.select_dtypes(include=["number"]).columns.tolist()
-            size_candidates = [c for c in num_cols if c not in [x_col, y_col]]
-            size_col = size_candidates[0] if size_candidates else y_col
-            fig = px.scatter(plot_df, x=x_col, y=y_col, size=size_col, color=hue_col, title=f"{title} (Bubble: {size_col})")
-
-        else:
-            fig = px.bar(plot_df.head(15), x=x_col, y=y_col, title=title)
-
-    except Exception as e:
-        try:
-            print(f"[WARN] Plotly generation fallback: {e}")
-        except Exception:
-            pass
-        fig = px.bar(plot_df.head(10), x=x_col, y=y_col, title=title)
-
-    # Master Layout Customization (Modern SaaS aesthetics)
-    fig.update_layout(
-        paper_bgcolor=bg_color,
-        plot_bgcolor=bg_color,
-        font=dict(family="Inter, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif", size=12, color=text_color),
-        title=dict(
-            text=f"<b>{title}</b>",
-            font=dict(size=15, color=text_color),
-            x=0.03,
-            y=0.96
-        ),
-        margin=dict(l=35, r=25, t=50, b=35),
-        hovermode="closest",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1,
-            font=dict(size=10, color=sub_color)
-        ),
-        xaxis=dict(
-            showgrid=False,
-            zeroline=False,
-            color=sub_color,
-            tickfont=dict(size=11, color=sub_color)
-        ),
-        yaxis=dict(
-            showgrid=True,
-            gridcolor=grid_color,
-            zeroline=False,
-            color=sub_color,
-            tickfont=dict(size=11, color=sub_color)
-        )
-    )
-
-    try:
-        return json.loads(fig.to_json())
-    except Exception:
-        return fig.to_dict()
-
-
-# ==============================================================================
-# ENGINE 1: MATPLOTLIB / SEABORN PRO (Studio-Grade Publication Quality)
+# STUDIO MATPLOTLIB / SEABORN ENGINE (Magazine-Grade Publication Quality)
 # ==============================================================================
 
 @tool
@@ -795,39 +604,3 @@ def generate_chart(
         sns.set_theme(style="whitegrid")
         return f"Error generating chart: {str(e)}"
 
-
-# ==============================================================================
-# DUAL ENGINE COMBO RENDERER
-# ==============================================================================
-
-def render_chart_dual(args: dict) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """
-    Renders both:
-    1. Studio-Grade High-Res Matplotlib PNG (Base64)
-    2. Interactive Plotly Figure Specification (Dictionary with hover tooltips and zoom)
-    Shares preprocessed plot_df for O(N) optimal time and O(1) space complexity.
-    """
-    df = get_active_df()
-    chart_type = args.get("chart_type", "bar")
-    x_col = args.get("x_col")
-    y_col = args.get("y_col")
-    hue_col = args.get("hue_col")
-    title = args.get("title", "Data Analysis Chart")
-    palette = args.get("palette")
-    style = args.get("style", "whitegrid")
-
-    # 1. Generate Studio Matplotlib PNG
-    data_url = generate_chart.invoke(args)
-
-    # 2. Generate Interactive Plotly Specification (Shares preprocessed data)
-    plotly_spec = None
-    try:
-        plot_df = smart_preprocess_data(df, chart_type, x_col, y_col, hue_col)
-        plotly_spec = build_plotly_chart(chart_type, plot_df, x_col, y_col, hue_col, title, palette, style)
-    except Exception as e:
-        try:
-            print(f"[WARN] Dual render Plotly build failed: {e}")
-        except Exception:
-            pass
-
-    return data_url, plotly_spec

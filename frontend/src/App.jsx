@@ -137,8 +137,6 @@ export default function App() {
           const newChart = {
             id: Date.now(),
             url: data.chart_url,
-            interactive_spec: data.interactive_spec,
-            has_interactive: data.has_interactive,
             chart_type: data.chart_type,
             title: data.tool_args?.title || data.chart_type,
             tokens: data.tokens,
@@ -197,16 +195,12 @@ export default function App() {
           setActiveChart((prev) => ({
             ...prev,
             url: data.chart_url,
-            interactive_spec: data.interactive_spec,
-            has_interactive: data.has_interactive,
             args: data.tool_args
           }));
           setChartHistory((prev) =>
             prev.map((c) => (c.id === activeChart.id ? {
               ...c,
               url: data.chart_url,
-              interactive_spec: data.interactive_spec,
-              has_interactive: data.has_interactive,
               args: data.tool_args
             } : c))
           );
