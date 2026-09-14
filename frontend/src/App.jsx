@@ -97,9 +97,11 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        await fetchDataset();
+        // Upload response already contains full dataset metadata —
+        // no need for a separate /api/dataset call (saves one round-trip)
+        setDataset(data);
         setToast({
-          message: `Dataset "${file.name}" loaded successfully (${data.row_count || 'new'} rows)!`,
+          message: `Dataset "${file.name}" loaded! (${data.row_count} rows, ${data.column_count} columns)`,
           type: 'success'
         });
       } else {
@@ -109,6 +111,8 @@ export default function App() {
       setToast({ message: 'Failed to upload CSV dataset', type: 'error' });
     } finally {
       setUploading(false);
+      // Reset input so same file can be re-uploaded
+      e.target.value = '';
     }
   };
 

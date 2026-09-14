@@ -136,29 +136,33 @@ def health():
 
 
 @app.get("/api/dataset")
-def get_dataset():
+async def get_dataset():
     """Returns current dataset overview, column metadata, and sample rows."""
     try:
         current_df = main.df
         numeric_cols = list(current_df.select_dtypes(include=["number"]).columns)
         categorical_cols = [c for c in current_df.columns if c not in numeric_cols]
-
         total_rows = len(current_df)
 
+        # Fast vectorized approach — avoids slow Python iterrows() loops
+        # head/tail for display (max 20 rows shown)
         if total_rows > 20:
-            head_df = current_df.head(10).copy()
-            tail_df = current_df.tail(10).copy()
-            head_rows = [{"_row_idx": int(idx) + 1, **row} for idx, row in head_df.iterrows()]
-            tail_rows = [{"_row_idx": int(idx) + 1, **row} for idx, row in tail_df.iterrows()]
+            head_df = current_df.head(10).reset_index(drop=True)
+            tail_df = current_df.tail(10).reset_index(drop=True)
+            head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(head_df.to_dict(orient="records"))]
+            tail_rows = [{"_row_idx": total_rows - 9 + i, **r} for i, r in enumerate(tail_df.to_dict(orient="records"))]
             has_ellipsis = True
             hidden_count = total_rows - 20
         else:
-            head_rows = [{"_row_idx": int(idx) + 1, **row} for idx, row in current_df.iterrows()]
+            recs = current_df.reset_index(drop=True).to_dict(orient="records")
+            head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(recs)]
             tail_rows = []
             has_ellipsis = False
             hidden_count = 0
 
-        all_records = [{"_row_idx": int(idx) + 1, **row} for idx, row in current_df.head(200).iterrows()]
+        # Sample for table preview (max 200 rows, vectorized)
+        sample_df = current_df.head(200).reset_index(drop=True)
+        all_records = [{"_row_idx": i + 1, **r} for i, r in enumerate(sample_df.to_dict(orient="records"))]
 
         return {
             "columns": list(current_df.columns),
@@ -171,7 +175,7 @@ def get_dataset():
             "has_ellipsis": has_ellipsis,
             "hidden_count": hidden_count,
             "sample_data": all_records,
-            "describe": current_df.describe().round(2).to_dict() if len(numeric_cols) > 0 else {}
+            "describe": current_df.describe().round(2).to_dict() if numeric_cols else {}
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -179,22 +183,57 @@ def get_dataset():
 
 @app.post("/api/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
-    """Upload a new CSV file to replace current dataset."""
+    """Upload a new CSV file. Returns full dataset metadata so the frontend
+    does NOT need a separate /api/dataset call after upload (saves one round-trip)."""
     try:
         contents = await file.read()
         new_df = pd.read_csv(io.BytesIO(contents))
-        
+
         if new_df.empty:
             raise HTTPException(status_code=400, detail="Uploaded CSV file is empty.")
-            
+
         main.df = new_df
         LLM_CACHE.clear()
-        
+
+        # Build full dataset payload inline — no extra API call needed
+        numeric_cols = list(new_df.select_dtypes(include=["number"]).columns)
+        categorical_cols = [c for c in new_df.columns if c not in numeric_cols]
+        total_rows = len(new_df)
+
+        if total_rows > 20:
+            head_df = new_df.head(10).reset_index(drop=True)
+            tail_df = new_df.tail(10).reset_index(drop=True)
+            head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(head_df.to_dict(orient="records"))]
+            tail_rows = [{"_row_idx": total_rows - 9 + i, **r} for i, r in enumerate(tail_df.to_dict(orient="records"))]
+            has_ellipsis = True
+            hidden_count = total_rows - 20
+        else:
+            recs = new_df.reset_index(drop=True).to_dict(orient="records")
+            head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(recs)]
+            tail_rows = []
+            has_ellipsis = False
+            hidden_count = 0
+
+        sample_df = new_df.head(200).reset_index(drop=True)
+        all_records = [{"_row_idx": i + 1, **r} for i, r in enumerate(sample_df.to_dict(orient="records"))]
+
         return {
-            "message": f"Successfully loaded '{file.filename}' with {len(new_df)} rows and {len(new_df.columns)} columns.",
+            "success": True,
+            "message": f"'{file.filename}' loaded — {total_rows} rows, {len(new_df.columns)} columns.",
             "columns": list(new_df.columns),
-            "row_count": len(new_df)
+            "numeric_columns": numeric_cols,
+            "categorical_columns": categorical_cols,
+            "row_count": total_rows,
+            "column_count": len(new_df.columns),
+            "head_rows": head_rows,
+            "tail_rows": tail_rows,
+            "has_ellipsis": has_ellipsis,
+            "hidden_count": hidden_count,
+            "sample_data": all_records,
+            "describe": new_df.describe().round(2).to_dict() if numeric_cols else {}
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read CSV: {str(e)}")
 
