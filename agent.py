@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
+from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_mistralai import ChatMistralAI
 from langchain_groq import ChatGroq
@@ -54,6 +55,19 @@ GROQ_MODELS = [
     "llama-3.1-8b-instant",
     "llama3-8b-8192",
 ]
+
+# FreeLLMAPI routing model names (smart auto-routing across 34 providers)
+# Ref: https://github.com/tashfeenahmed/freellmapi
+FREELLMAPI_MODELS = [
+    "auto",           # Best available model (smart routing)
+    "auto:balanced",  # Speed + capability balanced
+    "auto:speed",     # Fastest free model
+]
+
+# FreeLLMAPI connection config — set in .env
+# Start freellmapi locally: npx freellmapi  (or docker run freellmapi/server)
+FREELLMAPI_BASE_URL = os.getenv("FREELLMAPI_BASE_URL", "http://localhost:3000/v1")
+FREELLMAPI_API_KEY  = os.getenv("FREELLMAPI_API_KEY", "freellmapi-local")
 
 # Circuit Breaker: skips Gemini for 60s after a 429 quota error to avoid
 # stacking 10-12s network timeouts on every request.
@@ -127,10 +141,29 @@ def create_groq_chain(model_name: str = "llama-3.3-70b-versatile"):
     return llm.bind_tools([generate_chart])
 
 
+def create_freellmapi_chain(model_name: str = "auto"):
+    """
+    [TEST] Returns a FreeLLMAPI chain — OpenAI-compatible local proxy that
+    aggregates 34 free LLM providers (635 endpoints, 7.4B tokens/month).
+    Requires freellmapi server running locally: npx freellmapi
+    Ref: https://github.com/tashfeenahmed/freellmapi
+    """
+    llm = ChatOpenAI(
+        model=model_name,
+        base_url=FREELLMAPI_BASE_URL,
+        api_key=FREELLMAPI_API_KEY,
+        temperature=0,
+        max_retries=0,
+        timeout=15,
+    )
+    return llm.bind_tools([generate_chart])
+
+
 # Pre-initialize all chains ONCE at startup so cascade has zero per-request overhead
-_GEMINI_CHAINS  = {m: create_model_chain(m)   for m in CANDIDATE_MODELS}
-_MISTRAL_CHAINS = {m: create_mistral_chain(m) for m in MISTRAL_MODELS}
-_GROQ_CHAINS    = {m: create_groq_chain(m)    for m in GROQ_MODELS}
+_GEMINI_CHAINS      = {m: create_model_chain(m)    for m in CANDIDATE_MODELS}
+_MISTRAL_CHAINS     = {m: create_mistral_chain(m)  for m in MISTRAL_MODELS}
+_GROQ_CHAINS        = {m: create_groq_chain(m)     for m in GROQ_MODELS}
+_FREELLMAPI_CHAINS  = {m: create_freellmapi_chain(m) for m in FREELLMAPI_MODELS}
 
 # Primary model exposed for backward compatibility with main.py / chart_chain
 llm            = ChatGoogleGenerativeAI(model="gemini-flash-latest", temperature=0,
@@ -266,6 +299,8 @@ def invoke_ai_with_fallbacks(inputs: dict):
     """
     Cascading AI invocation with automatic fallbacks and circuit-breaker protection:
 
+    0. FreeLLMAPI [TEST] - local proxy aggregating 34 free providers (7.4B tokens/month)
+                          Only active if FREELLMAPI_ENABLED=true in .env
     1. Gemini  - skipped for 60s after a 429 quota error (circuit breaker)
     2. Mistral - used if MISTRAL_API_KEY is set
     3. Groq    - used if GROQ_API_KEY is set
@@ -273,6 +308,16 @@ def invoke_ai_with_fallbacks(inputs: dict):
     """
     prompt_val = prompt_template.format_prompt(**format_prompt_inputs(inputs))
     now        = time.time()
+
+    # 0. FreeLLMAPI [TEST] — aggregates 34 free providers behind one /v1 endpoint
+    #    Enable by setting FREELLMAPI_ENABLED=true in .env and running: npx freellmapi
+    if os.getenv("FREELLMAPI_ENABLED", "").lower() == "true":
+        _safe_print("[INFO] Trying FreeLLMAPI (34 providers, 635 models)...")
+        result, label = _try_model_cascade(_FREELLMAPI_CHAINS, prompt_val, "freellmapi")
+        if result:
+            _safe_print(f"[SUCCESS] FreeLLMAPI generated chart via {label}.")
+            return result, label
+        _safe_print("[WARN] FreeLLMAPI unavailable — falling through to Gemini.")
 
     # 1. Gemini
     if now >= CIRCUIT_BREAKER["gemini_quota_exhausted_until"]:
