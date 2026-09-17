@@ -3089,7 +3089,7 @@ html, body {
     gap: 14px;
   }
   .bottom-explorer-section {
-    padding: 0 14px 14px 14px;
+    display: none !important;
   }
   .studio-selection-grid {
     grid-template-columns: 1fr;
