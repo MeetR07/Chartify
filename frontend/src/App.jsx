@@ -12,6 +12,8 @@ import Footer from './components/Footer';
 import { THEME_STYLES, PALETTES } from './constants/themeOptions';
 import { generateAccurateChartQuery, getDynamicQuickChips } from './utils/dynamicPrompts';
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+
 export default function App() {
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('chartify_theme');
@@ -69,7 +71,7 @@ export default function App() {
   // Fetch current dataset metadata
   const fetchDataset = async () => {
     try {
-      const res = await fetch('/api/dataset');
+      const res = await fetch(`${API_BASE}/api/dataset`);
       if (res.ok) {
         const data = await res.json();
         setDataset(data);
@@ -94,7 +96,7 @@ export default function App() {
 
     setUploading(true);
     try {
-      const res = await fetch('/api/upload-csv', {
+      const res = await fetch(`${API_BASE}/api/upload-csv`, {
         method: 'POST',
         body: formData,
       });
@@ -148,7 +150,7 @@ export default function App() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/generate-chart', {
+      const res = await fetch(`${API_BASE}/api/generate-chart`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -205,7 +207,7 @@ export default function App() {
       setIsRestyling(true);
 
       try {
-        const res = await fetch('/api/apply-style', {
+        const res = await fetch(`${API_BASE}/api/apply-style`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
