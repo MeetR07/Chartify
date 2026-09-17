@@ -428,9 +428,11 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     cameraRef.current = camera;
 
     // 3. Renderer
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(isMobile ? Math.min(window.devicePixelRatio || 1, 1.5) : Math.min(window.devicePixelRatio || 1, 2));
+    renderer.domElement.style.touchAction = 'none';
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     rendererRef.current = renderer;
@@ -446,6 +448,11 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     controls.maxDistance = 50;
     controls.autoRotate = autoRotate;
     controls.autoRotateSpeed = 1.2;
+    controls.rotateSpeed = isMobile ? 0.75 : 1.0;
+    controls.touches = {
+      ONE: THREE.TOUCH.ROTATE,
+      TWO: THREE.TOUCH.DOLLY_PAN
+    };
     if (displayMode === 'card') {
       controls.target.set(0, 5.7, 0);
     } else {
@@ -562,7 +569,8 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     };
     animFrameRef.current = requestAnimationFrame(animate);
 
-    // 10. Responsive Resizing
+    // 10. Responsive Resizing with requestAnimationFrame throttling
+    let resizeRaf = null;
     const handleResize = () => {
       if (!container || !renderer || !camera) return;
       const w = container.clientWidth || 600;
@@ -573,16 +581,23 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     };
 
     const resizeObserver = new ResizeObserver(() => {
-      handleResize();
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(handleResize);
     });
     resizeObserver.observe(container);
-    window.addEventListener('resize', handleResize);
+
+    const onWindowResize = () => {
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(handleResize);
+    };
+    window.addEventListener('resize', onWindowResize);
 
     // Cleanup
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
       resizeObserver.disconnect();
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('resize', onWindowResize);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
       renderer.domElement.removeEventListener('pointerleave', onPointerLeave);
       if (tooltipRef.current) {

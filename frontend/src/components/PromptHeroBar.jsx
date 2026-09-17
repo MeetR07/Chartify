@@ -135,12 +135,12 @@ export default function PromptHeroBar({
           {loading ? (
             <>
               <RefreshCw size={14} className="spin" />
-              <span>COOKING...</span>
+              <span className="submit-btn-text">COOKING...</span>
             </>
           ) : (
             <>
               <Flame size={15} className="submit-btn-flame" />
-              <span>COOK CHART</span>
+              <span className="submit-btn-text">COOK CHART</span>
               <ArrowRight size={15} className="submit-btn-arrow" />
             </>
           )}

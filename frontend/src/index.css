@@ -3036,51 +3036,311 @@ body::after {
 }
 
 /* ==========================================================================
-   Responsive Adaptations
+   Comprehensive Responsive Adaptations & Fluid Zero-Lag Layout
    ========================================================================== */
-@media (max-width: 1120px) {
+/* Global Viewport Overflow Shield */
+html, body {
+  overflow-x: hidden;
+  max-width: 100vw;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* --- Laptop / Tablet Landscape (<= 1024px) --- */
+@media (max-width: 1024px) {
   .dashboard-container {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 18px;
+    gap: 16px;
+  }
+  .studio-column {
+    order: 1;
+    width: 100%;
   }
   .sidebar-panel {
+    order: 2;
+    width: 100%;
     position: static;
     max-height: none;
   }
+  .three-canvas-wrapper,
+  .three-viewport {
+    min-height: 380px;
+  }
 }
 
+/* --- Tablets & Phablets (<= 768px) --- */
 @media (max-width: 768px) {
   .navbar {
-    padding: 0 16px;
+    padding: 0 14px;
+    height: 54px;
+    min-height: 54px;
   }
   .status-pill {
     display: none;
   }
   .dashboard-container {
-    padding: 14px 16px;
-    gap: 16px;
+    padding: 12px 14px;
+    gap: 14px;
   }
   .bottom-explorer-section {
-    padding: 0 16px 16px 16px;
+    padding: 0 14px 14px 14px;
   }
   .studio-selection-grid {
     grid-template-columns: 1fr;
   }
+
+  /* Prompt Hero Bar in tablet */
   .prompt-bar-container {
-    height: auto;
+    height: 48px;
     min-height: 48px;
-    padding: 6px 8px;
-    flex-wrap: wrap;
+    padding: 5px 6px;
+    gap: 8px;
   }
   .prompt-left-badge {
-    max-width: 100%;
+    height: 36px;
+    padding: 0 12px;
+    gap: 6px;
+  }
+  .prompt-badge-text {
+    font-size: 0.72rem;
+  }
+  .prompt-input {
+    font-size: 0.86rem;
   }
   .submit-btn {
-    width: 100%;
-    justify-content: center;
+    height: 36px;
+    padding: 0 14px;
+    font-size: 0.75rem;
   }
+
+  /* Canvas and Viewport */
+  .canvas-card {
+    padding: 12px 14px;
+  }
+  .three-canvas-wrapper,
+  .three-viewport {
+    min-height: 350px;
+    height: 350px;
+    touch-action: none;
+  }
+  .three-controls-dock {
+    bottom: 8px;
+    padding: 3px 6px;
+    gap: 4px;
+    max-width: 95%;
+  }
+  .three-btn {
+    padding: 3px 6px;
+    font-size: 0.68rem;
+  }
+
+  /* Modals */
+  .zoom-modal-box,
+  .dataset-modal-box {
+    width: 96vw;
+    max-width: 96vw;
+    height: 90vh;
+    max-height: 90vh;
+    padding: 12px;
+  }
+  .threed-modal-card {
+    width: 96vw;
+    max-width: 96vw;
+    height: 85vh;
+    max-height: 85vh;
+  }
+
   .footer-content {
     flex-direction: column;
     align-items: flex-start;
+    gap: 12px;
+  }
+}
+
+/* --- Mobile Phones (<= 540px) --- */
+@media (max-width: 540px) {
+  .navbar {
+    padding: 0 10px;
+    height: 50px;
+    min-height: 50px;
+  }
+  .brand-section {
+    gap: 8px;
+  }
+  .logo-icon {
+    width: 30px;
+    height: 30px;
+  }
+  .brand-title {
+    font-size: 1.15rem;
+  }
+  .brand-badge {
+    display: none;
+  }
+  .token-pill {
+    padding: 4px 8px;
+    font-size: 0.68rem;
+    gap: 4px;
+  }
+  .token-pill span {
+    font-size: 0.68rem;
+  }
+
+  .dashboard-container {
+    padding: 10px 10px;
+    gap: 12px;
+  }
+
+  /* Mobile Search Bar - Fluid Two-Row / Responsive Card Capsule */
+  .prompt-bar-wrapper {
+    border-radius: 24px;
+  }
+  .prompt-bar-container {
+    height: auto;
+    min-height: 48px;
+    padding: 8px 10px;
+    flex-wrap: wrap;
+    gap: 8px;
+    border-radius: 24px;
+  }
+  .prompt-left-badge {
+    height: 32px;
+    padding: 0 10px;
+    gap: 5px;
+  }
+  .prompt-badge-text {
+    font-size: 0.68rem;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .prompt-search-icon {
+    display: none;
+  }
+  .prompt-input {
+    min-width: 120px;
+    font-size: 0.82rem;
+  }
+  .prompt-input::placeholder {
+    font-size: 0.78rem;
+    text-overflow: ellipsis;
+  }
+  .prompt-attach-btn {
+    width: 32px;
+    height: 32px;
+  }
+  .submit-btn {
+    height: 32px;
+    padding: 0 12px;
+    font-size: 0.72rem;
+    gap: 5px;
+    margin-left: auto;
+  }
+
+  /* Toolbar */
+  .canvas-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .canvas-toolbar-left {
+    justify-content: space-between;
+    width: 100%;
+  }
+  .canvas-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+  .canvas-surprise-btn {
+    padding: 5px 10px !important;
+    font-size: 0.70rem !important;
+  }
+  .download-btn span {
+    display: none;
+  }
+  .download-btn {
+    padding: 6px 9px;
+  }
+
+  /* 3D Canvas */
+  .three-canvas-wrapper,
+  .three-viewport {
+    min-height: 310px;
+    height: 310px;
+    touch-action: none;
+  }
+  .three-controls-dock {
+    bottom: 6px;
+    padding: 2px 4px;
+    gap: 2px;
+    border-radius: 14px;
+  }
+  .three-btn {
+    padding: 3px 5px;
+    font-size: 0.62rem;
+    gap: 3px;
+  }
+  .three-btn span {
+    display: none;
+  }
+
+  /* Data Summary Bar */
+  .data-summary-bar {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .stat-box {
+    padding: 6px 4px;
+  }
+  .stat-value {
+    font-size: 1.05rem;
+  }
+  .stat-label {
+    font-size: 0.58rem;
+    letter-spacing: 0.02em;
+  }
+
+  /* History scroll */
+  .history-card-thumb {
+    width: 90px;
+    padding: 3px 4px;
+  }
+  .history-thumb-img {
+    height: 38px;
+  }
+
+  /* Gallery Grid */
+  .threed-cards-grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .threed-gallery-section {
+    padding: 16px 10px 32px 10px;
+  }
+  .threed-title {
+    font-size: 1.3rem;
+  }
+}
+
+/* --- Very Small Devices (<= 380px) --- */
+@media (max-width: 380px) {
+  .brand-title {
+    font-size: 1.0rem;
+  }
+  .prompt-badge-text {
+    max-width: 100px;
+  }
+  .submit-btn-text {
+    display: none;
+  }
+  .submit-btn {
+    padding: 0 10px;
   }
 }
 
