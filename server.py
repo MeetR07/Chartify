@@ -3,7 +3,7 @@ import io
 import sys
 import time
 import base64
-from typing import Optional
+from typing import Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -135,48 +135,69 @@ def health():
     return {"status": "ok", "timestamp": time.time()}
 
 
+def build_dataset_payload(df: pd.DataFrame, filename: str = None) -> dict:
+    """Safely builds JSON-compliant dataset metadata and preview records.
+    Replaces NaN and infinite values with None so standard JSON serialization succeeds."""
+    numeric_cols = list(df.select_dtypes(include=["number"]).columns)
+    num_set = set(numeric_cols)
+    categorical_cols = [c for c in df.columns if c not in num_set]
+    total_rows = len(df)
+
+    if total_rows > 20:
+        head_raw = df.head(10).reset_index(drop=True)
+        tail_raw = df.tail(10).reset_index(drop=True)
+        head_clean = head_raw.where(pd.notnull(head_raw), None)
+        tail_clean = tail_raw.where(pd.notnull(tail_raw), None)
+        head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(head_clean.to_dict(orient="records"))]
+        tail_rows = [{"_row_idx": total_rows - 9 + i, **r} for i, r in enumerate(tail_clean.to_dict(orient="records"))]
+        has_ellipsis = True
+        hidden_count = total_rows - 20
+    else:
+        all_clean = df.reset_index(drop=True).where(pd.notnull(df.reset_index(drop=True)), None)
+        head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(all_clean.to_dict(orient="records"))]
+        tail_rows = []
+        has_ellipsis = False
+        hidden_count = 0
+
+    sample_raw = df.head(200).reset_index(drop=True)
+    sample_clean = sample_raw.where(pd.notnull(sample_raw), None)
+    all_records = [{"_row_idx": i + 1, **r} for i, r in enumerate(sample_clean.to_dict(orient="records"))]
+
+    describe_data = {}
+    if numeric_cols:
+        try:
+            # Scalable statistics: Sample up to 25,000 rows for instant describe computation on large datasets
+            calc_df = df[numeric_cols].sample(25000, random_state=42) if total_rows > 25000 else df[numeric_cols]
+            desc_df = calc_df.describe().round(2)
+            desc_clean = desc_df.where(pd.notnull(desc_df), None)
+            describe_data = desc_clean.to_dict()
+        except Exception:
+            describe_data = {}
+
+    payload = {
+        "columns": list(df.columns),
+        "numeric_columns": numeric_cols,
+        "categorical_columns": categorical_cols,
+        "row_count": total_rows,
+        "column_count": len(df.columns),
+        "head_rows": head_rows,
+        "tail_rows": tail_rows,
+        "has_ellipsis": has_ellipsis,
+        "hidden_count": hidden_count,
+        "sample_data": all_records,
+        "describe": describe_data
+    }
+    if filename:
+        payload["success"] = True
+        payload["message"] = f"'{filename}' loaded — {total_rows} rows, {len(df.columns)} columns."
+    return payload
+
+
 @app.get("/api/dataset")
 async def get_dataset():
     """Returns current dataset overview, column metadata, and sample rows."""
     try:
-        current_df = main.df
-        numeric_cols = list(current_df.select_dtypes(include=["number"]).columns)
-        categorical_cols = [c for c in current_df.columns if c not in numeric_cols]
-        total_rows = len(current_df)
-
-        # Fast vectorized approach — avoids slow Python iterrows() loops
-        # head/tail for display (max 20 rows shown)
-        if total_rows > 20:
-            head_df = current_df.head(10).reset_index(drop=True)
-            tail_df = current_df.tail(10).reset_index(drop=True)
-            head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(head_df.to_dict(orient="records"))]
-            tail_rows = [{"_row_idx": total_rows - 9 + i, **r} for i, r in enumerate(tail_df.to_dict(orient="records"))]
-            has_ellipsis = True
-            hidden_count = total_rows - 20
-        else:
-            recs = current_df.reset_index(drop=True).to_dict(orient="records")
-            head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(recs)]
-            tail_rows = []
-            has_ellipsis = False
-            hidden_count = 0
-
-        # Sample for table preview (max 200 rows, vectorized)
-        sample_df = current_df.head(200).reset_index(drop=True)
-        all_records = [{"_row_idx": i + 1, **r} for i, r in enumerate(sample_df.to_dict(orient="records"))]
-
-        return {
-            "columns": list(current_df.columns),
-            "numeric_columns": numeric_cols,
-            "categorical_columns": categorical_cols,
-            "row_count": total_rows,
-            "column_count": len(current_df.columns),
-            "head_rows": head_rows,
-            "tail_rows": tail_rows,
-            "has_ellipsis": has_ellipsis,
-            "hidden_count": hidden_count,
-            "sample_data": all_records,
-            "describe": current_df.describe().round(2).to_dict() if numeric_cols else {}
-        }
+        return build_dataset_payload(main.df)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -184,10 +205,13 @@ async def get_dataset():
 @app.post("/api/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
     """Upload a new CSV file. Returns full dataset metadata so the frontend
-    does NOT need a separate /api/dataset call after upload (saves one round-trip)."""
+    does NOT need a separate /api/dataset call after upload."""
     try:
         contents = await file.read()
-        new_df = pd.read_csv(io.BytesIO(contents))
+        try:
+            new_df = pd.read_csv(io.BytesIO(contents))
+        except UnicodeDecodeError:
+            new_df = pd.read_csv(io.BytesIO(contents), encoding="latin1")
 
         if new_df.empty:
             raise HTTPException(status_code=400, detail="Uploaded CSV file is empty.")
@@ -195,43 +219,7 @@ async def upload_csv(file: UploadFile = File(...)):
         main.df = new_df
         LLM_CACHE.clear()
 
-        # Build full dataset payload inline — no extra API call needed
-        numeric_cols = list(new_df.select_dtypes(include=["number"]).columns)
-        categorical_cols = [c for c in new_df.columns if c not in numeric_cols]
-        total_rows = len(new_df)
-
-        if total_rows > 20:
-            head_df = new_df.head(10).reset_index(drop=True)
-            tail_df = new_df.tail(10).reset_index(drop=True)
-            head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(head_df.to_dict(orient="records"))]
-            tail_rows = [{"_row_idx": total_rows - 9 + i, **r} for i, r in enumerate(tail_df.to_dict(orient="records"))]
-            has_ellipsis = True
-            hidden_count = total_rows - 20
-        else:
-            recs = new_df.reset_index(drop=True).to_dict(orient="records")
-            head_rows = [{"_row_idx": i + 1, **r} for i, r in enumerate(recs)]
-            tail_rows = []
-            has_ellipsis = False
-            hidden_count = 0
-
-        sample_df = new_df.head(200).reset_index(drop=True)
-        all_records = [{"_row_idx": i + 1, **r} for i, r in enumerate(sample_df.to_dict(orient="records"))]
-
-        return {
-            "success": True,
-            "message": f"'{file.filename}' loaded — {total_rows} rows, {len(new_df.columns)} columns.",
-            "columns": list(new_df.columns),
-            "numeric_columns": numeric_cols,
-            "categorical_columns": categorical_cols,
-            "row_count": total_rows,
-            "column_count": len(new_df.columns),
-            "head_rows": head_rows,
-            "tail_rows": tail_rows,
-            "has_ellipsis": has_ellipsis,
-            "hidden_count": hidden_count,
-            "sample_data": all_records,
-            "describe": new_df.describe().round(2).to_dict() if numeric_cols else {}
-        }
+        return build_dataset_payload(new_df, filename=file.filename)
     except HTTPException:
         raise
     except Exception as e:
@@ -258,6 +246,7 @@ async def generate_chart_endpoint(req: QueryRequest):
             if req.palette:
                 args["palette"] = req.palette
 
+            args["query"] = req.query
             args["output_path"] = ":memory:"
             data_url = await asyncio.to_thread(render_chart_safe, args)
             return {
@@ -319,6 +308,8 @@ async def generate_chart_endpoint(req: QueryRequest):
         if req.palette:
             args["palette"] = req.palette
 
+        args["query"] = req.query
+
         # Cache tool args for subsequent instant generations
         LLM_CACHE[cache_key] = {
             "tool_args": dict(args),
@@ -330,7 +321,7 @@ async def generate_chart_endpoint(req: QueryRequest):
         data_url = await asyncio.to_thread(render_chart_safe, args)
 
         # Self-healing fallback: If LLM generated bad args, instantly recover via heuristic
-        if isinstance(data_url, str) and data_url.startswith("Error generating chart:"):
+        if isinstance(data_url, str) and data_url.startswith("Error generating"):
             try:
                 print(f"[WARN] AI produced rendering error: '{data_url[:80]}'. Self-healing via Heuristic...")
             except Exception:
@@ -362,28 +353,29 @@ async def generate_chart_endpoint(req: QueryRequest):
 
 
 @app.post("/api/apply-style")
-async def apply_style_endpoint(req: StyleRequest):
+async def apply_style_endpoint(req: Dict[str, Any]):
     """Directly re-renders the chart with selected style & palette without calling the LLM asynchronously."""
     try:
-        args = {
-            "chart_type": req.chart_type,
-            "x_col": req.x_col,
-            "y_col": req.y_col,
-            "hue_col": req.hue_col,
-            "title": req.title or "Data Analysis Chart",
-            "style": req.style or "whitegrid",
-            "palette": req.palette or "deep",
-            "output_path": ":memory:"
-        }
+        args = dict(req)
+        args["title"] = args.get("title") or "Data Analysis Chart"
+        args["style"] = args.get("style") or "whitegrid"
+        args["palette"] = args.get("palette") or "deep"
+        args["output_path"] = ":memory:"
+        
         # Restyle chart purely in-memory in a non-blocking worker thread
         data_url = await asyncio.to_thread(render_chart_safe, args)
+        if isinstance(data_url, str) and data_url.startswith("Error generating"):
+            raise HTTPException(status_code=400, detail=data_url)
+
         return {
             "success": True,
-            "chart_type": req.chart_type,
+            "chart_type": args.get("chart_type", "chart"),
             "chart_url": data_url,
             "tool_args": args,
             "result": "Restyled in-memory"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

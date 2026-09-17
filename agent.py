@@ -1,17 +1,55 @@
 import os
 import sys
 import time
+import socket
+from urllib.parse import urlparse
 from dotenv import load_dotenv
+
+def is_service_alive(url: str, timeout: float = 0.15) -> bool:
+    """Instant TCP socket probe to verify if a local service is listening (<1ms) instead of waiting for 15-45s HTTP connection timeouts."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (OSError, ValueError):
+        return False
 
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_mistralai import ChatMistralAI
-from langchain_groq import ChatGroq
 
-from charts import generate_chart
+try:
+    from langchain_openai import ChatOpenAI
+    HAS_LANGCHAIN_OPENAI = True
+except ImportError:
+    ChatOpenAI = None
+    HAS_LANGCHAIN_OPENAI = False
+
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    HAS_GEMINI = True
+except ImportError:
+    ChatGoogleGenerativeAI = None
+    HAS_GEMINI = False
+
+try:
+    from langchain_mistralai import ChatMistralAI
+    HAS_MISTRAL = True
+except ImportError:
+    ChatMistralAI = None
+    HAS_MISTRAL = False
+
+try:
+    from langchain_groq import ChatGroq
+    HAS_GROQ = True
+except ImportError:
+    ChatGroq = None
+    HAS_GROQ = False
+
+import re
+from charts import generate_chart, detect_query_intent
 
 # Ensure UTF-8 output on Windows to prevent UnicodeEncodeError
 for stream in (sys.stdout, sys.stderr):
@@ -37,10 +75,10 @@ def _safe_print(*args, **kwargs):
 # ==============================================================================
 
 CANDIDATE_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
     "gemini-flash-latest",
-    "gemini-3.7-flash",
-    "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite",
+    "gemini-2.0-flash-lite",
 ]
 
 MISTRAL_MODELS = [
@@ -78,7 +116,7 @@ CIRCUIT_BREAKER = {
 
 # Keyword -> chart type mapping (ordered by specificity, most-specific first)
 CHART_PATTERNS = [
-    ("waterfall",    "waterfall"),
+    ("waterfall",     "waterfall"),
     ("lollipop",     "lollipop"),
     ("treemap",      "treemap"),
     ("pairplot",     "pairplot"),
@@ -115,6 +153,7 @@ def create_model_chain(model_name: str):
         temperature=0,
         google_api_key=os.getenv("GOOGLE_API_KEY"),
         max_retries=0,
+        timeout=8,
     )
     return llm.bind_tools([generate_chart])
 
@@ -126,6 +165,7 @@ def create_mistral_chain(model_name: str = "ministral-8b-latest"):
         mistral_api_key=os.getenv("MISTRAL_API_KEY"),
         temperature=0,
         max_retries=0,
+        timeout=8,
     )
     return llm.bind_tools([generate_chart])
 
@@ -137,38 +177,53 @@ def create_groq_chain(model_name: str = "llama-3.3-70b-versatile"):
         groq_api_key=os.getenv("GROQ_API_KEY"),
         temperature=0,
         max_retries=0,
+        timeout=8,
     )
     return llm.bind_tools([generate_chart])
 
 
 def create_freellmapi_chain(model_name: str = "auto"):
     """
-    [TEST] Returns a FreeLLMAPI chain — OpenAI-compatible local proxy that
+    Returns a FreeLLMAPI chain — OpenAI-compatible local proxy that
     aggregates 34 free LLM providers (635 endpoints, 7.4B tokens/month).
     Requires freellmapi server running locally: npx freellmapi
     Ref: https://github.com/tashfeenahmed/freellmapi
     """
-    llm = ChatOpenAI(
-        model=model_name,
-        base_url=FREELLMAPI_BASE_URL,
-        api_key=FREELLMAPI_API_KEY,
-        temperature=0,
-        max_retries=0,
-        timeout=15,
-    )
-    return llm.bind_tools([generate_chart])
+    if not HAS_LANGCHAIN_OPENAI or ChatOpenAI is None:
+        return None
+    try:
+        base_url = os.getenv("FREELLMAPI_BASE_URL", "http://localhost:3000/v1")
+        api_key  = os.getenv("FREELLMAPI_API_KEY", "freellmapi-local")
+        llm = ChatOpenAI(
+            model=model_name,
+            base_url=base_url,
+            api_key=api_key,
+            temperature=0,
+            max_retries=0,
+            timeout=15,
+        )
+        return llm.bind_tools([generate_chart])
+    except Exception:
+        return None
+
+
+def get_freellmapi_chains():
+    """Lazily resolves FreeLLMAPI chains with active .env config."""
+    if not HAS_LANGCHAIN_OPENAI or ChatOpenAI is None:
+        return {}
+    return {m: c for m in FREELLMAPI_MODELS if (c := create_freellmapi_chain(m)) is not None}
 
 
 # Pre-initialize all chains ONCE at startup so cascade has zero per-request overhead
-_GEMINI_CHAINS      = {m: create_model_chain(m)    for m in CANDIDATE_MODELS}
-_MISTRAL_CHAINS     = {m: create_mistral_chain(m)  for m in MISTRAL_MODELS}
-_GROQ_CHAINS        = {m: create_groq_chain(m)     for m in GROQ_MODELS}
-_FREELLMAPI_CHAINS  = {m: create_freellmapi_chain(m) for m in FREELLMAPI_MODELS}
+_GEMINI_CHAINS      = {m: create_model_chain(m)    for m in CANDIDATE_MODELS} if HAS_GEMINI and ChatGoogleGenerativeAI else {}
+_MISTRAL_CHAINS     = {m: create_mistral_chain(m)  for m in MISTRAL_MODELS} if HAS_MISTRAL and ChatMistralAI else {}
+_GROQ_CHAINS        = {m: create_groq_chain(m)     for m in GROQ_MODELS} if HAS_GROQ and ChatGroq else {}
+_FREELLMAPI_CHAINS  = get_freellmapi_chains()
 
 # Primary model exposed for backward compatibility with main.py / chart_chain
-llm            = ChatGoogleGenerativeAI(model="gemini-flash-latest", temperature=0,
-                                        google_api_key=os.getenv("GOOGLE_API_KEY"), max_retries=0)
-llm_with_tools = llm.bind_tools([generate_chart])
+llm            = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0,
+                                        google_api_key=os.getenv("GOOGLE_API_KEY"), max_retries=0) if HAS_GEMINI and ChatGoogleGenerativeAI else None
+llm_with_tools = llm.bind_tools([generate_chart]) if llm else None
 
 
 # ==============================================================================
@@ -187,11 +242,12 @@ def format_prompt_inputs(inputs: dict) -> dict:
     sample_rows = inputs.get("sample_data", [])
     user_query  = inputs.get("user_query", "")
 
-    # ── Column metadata (dtype-tagged) ──────────────────────────────────────
+    # ── Column metadata (dtype-tagged, O(1) dictionary lookups) ────────────
     col_lines = []
+    df_dtypes = df.dtypes.to_dict() if df is not None else {}
     for c in cols:
-        if df is not None and c in df.columns:
-            dtype = df[c].dtype
+        if c in df_dtypes:
+            dtype = df_dtypes[c]
             if pd.api.types.is_datetime64_any_dtype(dtype):
                 tag = "datetime"
             elif pd.api.types.is_numeric_dtype(dtype):
@@ -246,7 +302,12 @@ CHART TYPE SELECTION RULES (follow strictly):
 COLUMN ASSIGNMENT RULES:
   • ALWAYS use EXACT column names from the dataset (case-sensitive).
   • NEVER invent or guess column names.
-  • For "X by Y" queries: x_col = the grouping/category, y_col = the measure.
+  • For ranking or extreme queries on a single numeric column (e.g. "highest total_rooms", "top 10 rooms", "lowest total_rooms", "highest values in total_rooms"):
+    Set x_col = the numeric column, y_col = None, chart_type = "bar".
+    DO NOT pick an unrelated category column for grouping unless user explicitly asks "by <category>".
+  • For "Measure by Category" queries (e.g. "Profit by Month", "Sales by Region"):
+    x_col = the category/dimension (e.g. Month, Region)
+    y_col = the numeric measure (e.g. Profit, Sales)
   • For "X vs Y" queries: x_col = first mentioned, y_col = second mentioned.
   • hue_col = grouping/color split (optional, only when user implies comparison).
   • If user does NOT mention a column explicitly, infer the best match by dtype.
@@ -312,12 +373,19 @@ def invoke_ai_with_fallbacks(inputs: dict):
     # 0. FreeLLMAPI [TEST] — aggregates 34 free providers behind one /v1 endpoint
     #    Enable by setting FREELLMAPI_ENABLED=true in .env and running: npx freellmapi
     if os.getenv("FREELLMAPI_ENABLED", "").lower() == "true":
-        _safe_print("[INFO] Trying FreeLLMAPI (34 providers, 635 models)...")
-        result, label = _try_model_cascade(_FREELLMAPI_CHAINS, prompt_val, "freellmapi")
-        if result:
-            _safe_print(f"[SUCCESS] FreeLLMAPI generated chart via {label}.")
-            return result, label
-        _safe_print("[WARN] FreeLLMAPI unavailable — falling through to Gemini.")
+        base_url = os.getenv("FREELLMAPI_BASE_URL", "http://localhost:3000/v1")
+        if not HAS_LANGCHAIN_OPENAI:
+            _safe_print("[WARN] FREELLMAPI_ENABLED=true but 'langchain-openai' is not installed. Run: pip install langchain-openai")
+        elif not is_service_alive(base_url, timeout=0.15):
+            _safe_print(f"[INFO] FreeLLMAPI server not running at {base_url} (run 'npx freellmapi' to start). Skipping instantly.")
+        else:
+            _safe_print("[INFO] Trying FreeLLMAPI (34 providers, 635 models)...")
+            chains = get_freellmapi_chains()
+            result, label = _try_model_cascade(chains, prompt_val, "freellmapi")
+            if result:
+                _safe_print(f"[SUCCESS] FreeLLMAPI generated chart via {label}.")
+                return result, label
+            _safe_print("[WARN] FreeLLMAPI unavailable — falling through to Gemini.")
 
     # 1. Gemini
     if now >= CIRCUIT_BREAKER["gemini_quota_exhausted_until"]:
@@ -329,9 +397,9 @@ def invoke_ai_with_fallbacks(inputs: dict):
             except Exception as e:
                 err_msg = str(e)
                 _safe_print(f"[WARN] Gemini '{model_name}' failed: {err_msg[:120]}")
-                if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                if any(x in err_msg for x in ["429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "quota"]):
                     CIRCUIT_BREAKER["gemini_quota_exhausted_until"] = now + CIRCUIT_BREAKER["cooldown_seconds"]
-                    _safe_print("[INFO] Gemini quota hit (429). Circuit breaker tripped for 60s.")
+                    _safe_print(f"[INFO] Gemini unavailable ({'503 high demand' if '503' in err_msg else '429 quota'}). Switching immediately to next provider.")
                     break
     else:
         remaining = int(CIRCUIT_BREAKER["gemini_quota_exhausted_until"] - now)
@@ -364,14 +432,45 @@ def heuristic_chart_extractor(query: str, current_df: pd.DataFrame) -> dict:
     LLM cascade fails or quota is exhausted.  No external calls - always works.
     """
     q = query.lower().strip()
+    op, limit = detect_query_intent(query)
 
     chart_type = next((ctype for pattern, ctype in CHART_PATTERNS if pattern in q), "bar")
 
-    num_cols = [c for c in current_df.columns if pd.api.types.is_numeric_dtype(current_df[c])]
-    cat_cols = [c for c in current_df.columns if not pd.api.types.is_numeric_dtype(current_df[c])]
+    num_cols = list(current_df.select_dtypes(include=["number"]).columns)
+    num_set = set(num_cols)
+    cat_cols = [c for c in current_df.columns if c not in num_set]
     all_cols = list(current_df.columns)
 
+    # Check exact match first
     mentioned = [c for c in all_cols if c.lower() in q]
+
+    # If no exact match, check token / stem matches (e.g. "rooms" -> "total_rooms")
+    if not mentioned:
+        q_tokens = set(re.findall(r'[a-zA-Z]{3,}', q))
+        stopwords = {
+            "highest", "lowest", "find", "rank", "what", "show", "tell", "give", 
+            "display", "plot", "chart", "with", "have", "each", "value", "values", 
+            "descending", "ascending", "average", "mean", "maximum", "minimum", 
+            "most", "least", "more", "less", "them", "from", "into"
+        }
+        q_tokens -= stopwords
+        best_col = None
+        best_score = 0
+        for c in all_cols:
+            c_tokens = set(c.lower().split("_"))
+            overlap = len(q_tokens & c_tokens)
+            if overlap > best_score:
+                best_score = overlap
+                best_col = c
+            elif best_score == 0:
+                # Substring check
+                for qt in q_tokens:
+                    if qt in c.lower():
+                        mentioned.append(c)
+                        break
+        if best_col and best_col not in mentioned:
+            mentioned.insert(0, best_col)
+
     x_col = y_col = None
 
     if len(mentioned) >= 2:
@@ -398,8 +497,26 @@ def heuristic_chart_extractor(query: str, current_df: pd.DataFrame) -> dict:
         if c in cat_cols:
             x_col, y_col = c, (num_cols[0] if num_cols else None)
         else:
-            y_col = c
-            x_col = cat_cols[0] if cat_cols else (num_cols[0] if num_cols[0] != c else None)
+            # Numeric column: check if this is ranking, mean, max, min, or count query without "by"
+            if " by " not in q and " vs " not in q:
+                x_col = c
+                y_col = None
+                if op == "ranking_desc":
+                    title = f"Top {c} (Ranked Descending)"
+                elif op == "ranking_asc":
+                    title = f"Lowest {c} (Ranked Ascending)"
+                elif op == "max":
+                    title = f"Maximum of {c}"
+                elif op == "mean":
+                    title = f"Average of {c}"
+                elif op == "count":
+                    title = f"Distribution of {c}"
+                else:
+                    title = f"Analysis of {c}"
+                return {"chart_type": chart_type, "x_col": x_col, "y_col": y_col, "title": title, "query": query}
+            else:
+                y_col = c
+                x_col = cat_cols[0] if cat_cols else (num_cols[0] if num_cols[0] != c else None)
     else:
         x_col    = cat_cols[0] if cat_cols else (all_cols[0] if all_cols else None)
         rem_nums = [c for c in num_cols if c != x_col]
@@ -412,7 +529,7 @@ def heuristic_chart_extractor(query: str, current_df: pd.DataFrame) -> dict:
     else:
         title = f"{chart_type.capitalize()} Analysis"
 
-    return {"chart_type": chart_type, "x_col": x_col, "y_col": y_col, "title": title}
+    return {"chart_type": chart_type, "x_col": x_col, "y_col": y_col, "title": title, "query": query}
 
 
 # ==============================================================================
@@ -452,7 +569,9 @@ def execute_chart_tool(ai_message) -> dict:
 
 
 # Pure LLM chain
-ai_chain = RunnableLambda(format_prompt_inputs) | prompt_template | llm_with_tools
-
-# Full pipeline: formatter -> prompt -> LLM -> tool executor
-chart_chain = ai_chain | RunnableLambda(execute_chart_tool)
+if llm_with_tools:
+    ai_chain = RunnableLambda(format_prompt_inputs) | prompt_template | llm_with_tools
+    chart_chain = ai_chain | RunnableLambda(execute_chart_tool)
+else:
+    ai_chain = None
+    chart_chain = None

@@ -1,17 +1,17 @@
 import React from 'react';
-import { Sparkles, Zap, Sun, Moon } from 'lucide-react';
+import { Sparkles, Zap, Sun, Moon, Flame } from 'lucide-react';
 
 export default function Navbar({ theme, setTheme, sessionTokens }) {
   return (
     <nav className="navbar" role="navigation" aria-label="Main Navigation">
       <div className="brand-section">
         <div className="logo-icon" aria-hidden="true">
-          <Sparkles size={20} />
+          <Sparkles size={18} />
         </div>
         <div className="brand-info">
           <div className="brand-title-row">
             <span className="brand-title">Chartify</span>
-            <span className="brand-badge">AI STUDIO</span>
+            <span className="brand-badge">GEN-Z STUDIO ✦</span>
           </div>
         </div>
       </div>
@@ -19,12 +19,12 @@ export default function Navbar({ theme, setTheme, sessionTokens }) {
       <div className="nav-actions">
         <div className="status-pill" title="4-Tier Multi-Provider LLM Cascade active: Gemini, Mistral, Groq, Heuristic">
           <span className="status-dot" aria-hidden="true"></span>
-          <span>Gemini 3.6 Flash Active</span>
+          <span>⚡ Gemini 3.6 Flash Active</span>
         </div>
 
         <div className="token-pill" title="Tokens processed in current session">
-          <Zap size={13} aria-hidden="true" />
-          <span>{sessionTokens.toLocaleString()} Tokens</span>
+          <Flame size={13} aria-hidden="true" />
+          <span>{sessionTokens.toLocaleString()} Cooked</span>
         </div>
 
         <button
@@ -40,3 +40,4 @@ export default function Navbar({ theme, setTheme, sessionTokens }) {
     </nav>
   );
 }
+

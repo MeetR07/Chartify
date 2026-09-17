@@ -9,6 +9,23 @@ export const THEME_STYLES = [
 
 export const PALETTE_GROUPS = [
   {
+    group: '🧈 Butter & Green (Featured)',
+    palettes: [
+      {
+        id: 'butter_green',
+        label: 'Butter & Green',
+        desc: 'Rich Butter (#FFEFB3) & Deep Pine (#013E37)',
+        colors: ['#013E37', '#FFEFB3', '#08ab9c', '#f47a34', '#fc6eae', '#ffbd29']
+      },
+      {
+        id: 'aura_bloom',
+        label: 'Aura Bloom',
+        desc: 'Teal, Flamingo, Tangerine & Gold',
+        colors: ['#08ab9c', '#fc6eae', '#f47a34', '#ffbd29', '#feb3a8', '#146665']
+      },
+    ]
+  },
+  {
     group: '🌈 Gradient & Sequential',
     palettes: [
       { id: 'viridis', label: 'Viridis', desc: 'Purple → Teal → Yellow', colors: ['#440154', '#21918c', '#fde725'] },
@@ -57,6 +74,8 @@ export const PROMPT_CATEGORIES = [
 ];
 
 export const QUICK_PRESETS = [
+  { label: '🧈 Butter & Green', style: 'whitegrid', palette: 'butter_green' },
+  { label: '✨ Aura Bloom', style: 'whitegrid', palette: 'aura_bloom' },
   { label: '🌟 Clean Light', style: 'whitegrid', palette: 'deep' },
   { label: '🔥 Neon Sunset', style: 'dark_background', palette: 'inferno' },
   { label: '🌊 Emerald Ocean', style: 'whitegrid', palette: 'crest' },

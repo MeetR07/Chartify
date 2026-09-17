@@ -12,13 +12,13 @@ export default function DatasetExplorer({
       <div className="bottom-explorer-card glass-panel">
         <div className="panel-header">
           <div className="explorer-header-left">
-            <TableIcon className="panel-icon" size={18} aria-hidden="true" />
+            <TableIcon className="panel-icon" size={17} aria-hidden="true" />
             <div>
               <h3 className="explorer-title">
-                Dataset Deep-Dive Explorer & Live Records Preview
+                DATASET DEEP-DIVE EXPLORER ⚡
               </h3>
               <div className="explorer-subtitle">
-                {dataset.row_count.toLocaleString()} total rows • {dataset.column_count} columns (
+                {dataset.row_count.toLocaleString()} total rows • {dataset.column_count} features (
                 {dataset.numeric_columns.length} numeric,{' '}
                 {dataset.columns.length - dataset.numeric_columns.length} categorical)
               </div>
@@ -30,8 +30,8 @@ export default function DatasetExplorer({
             aria-label="Fullscreen Table Inspector"
             type="button"
           >
-            <Maximize2 size={13} />
-            <span>Fullscreen Inspector</span>
+            <Maximize2 size={12} />
+            <span>FULLSCREEN ✦</span>
           </button>
         </div>
 
@@ -40,16 +40,19 @@ export default function DatasetExplorer({
             <thead>
               <tr>
                 <th className="col-idx-header">#</th>
-                {dataset.columns.map((col) => (
-                  <th key={col}>
-                    <div className="col-th-inner">
-                      <span>{col}</span>
-                      <span className="col-th-badge">
-                        {dataset.numeric_columns.includes(col) ? '(num)' : '(str)'}
-                      </span>
-                    </div>
-                  </th>
-                ))}
+                {dataset.columns.map((col) => {
+                  const isNum = dataset.numeric_columns.includes(col);
+                  return (
+                    <th key={col}>
+                      <div className="col-th-inner">
+                        <span>{col}</span>
+                        <span className={`col-th-badge ${isNum ? 'num' : 'str'}`}>
+                          {isNum ? 'num' : 'str'}
+                        </span>
+                      </div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>

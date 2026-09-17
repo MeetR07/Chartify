@@ -6,15 +6,14 @@ export default function DatasetInspector({
   fetchDataset,
   setDatasetModal,
   handleFileUpload,
-  uploading,
-  onColumnClick
+  uploading
 }) {
   return (
     <div className="dataset-inspector-block">
       <div className="panel-header">
         <span className="panel-title">
-          <Database className="panel-icon" size={17} />
-          <span>Dataset Inspector</span>
+          <Database className="panel-icon" size={16} />
+          <span>DATA RADAR 🛰️</span>
         </span>
         <div className="panel-actions">
           <button
@@ -24,7 +23,7 @@ export default function DatasetInspector({
             aria-label="Fullscreen Dataset Inspector"
             type="button"
           >
-            <Maximize2 size={13} />
+            <Maximize2 size={12} />
           </button>
           <button
             onClick={fetchDataset}
@@ -33,7 +32,7 @@ export default function DatasetInspector({
             aria-label="Refresh Dataset"
             type="button"
           >
-            <RefreshCw size={13} />
+            <RefreshCw size={12} />
           </button>
         </div>
       </div>
@@ -43,26 +42,25 @@ export default function DatasetInspector({
           {/* Summary Stats Grid */}
           <div className="data-summary-bar">
             <div className="stat-box">
-              <div className="stat-value">{dataset.row_count.toLocaleString()}</div>
-              <div className="stat-label">Rows</div>
+              <div className="stat-value">{dataset.row_count != null ? dataset.row_count.toLocaleString() : 0}</div>
+              <div className="stat-label">ROWS</div>
             </div>
             <div className="stat-box">
-              <div className="stat-value">{dataset.column_count}</div>
-              <div className="stat-label">Columns</div>
+              <div className="stat-value">{dataset.column_count ?? dataset.columns?.length ?? 0}</div>
+              <div className="stat-label">FEATURES</div>
             </div>
             <div className="stat-box">
-              <div className="stat-value">{dataset.numeric_columns.length}</div>
-              <div className="stat-label">Numeric</div>
+              <div className="stat-value">{dataset.numeric_columns?.length ?? 0}</div>
+              <div className="stat-label">NUMERICS</div>
             </div>
           </div>
-
 
           {/* Data Table Preview */}
           <div className="table-wrapper">
             <table className="preview-table">
               <thead>
                 <tr>
-                  {dataset.columns.map((col) => (
+                  {(dataset.columns || []).map((col) => (
                     <th key={col}>{col}</th>
                   ))}
                 </tr>
@@ -70,8 +68,8 @@ export default function DatasetInspector({
               <tbody>
                 {(dataset.head_rows || dataset.sample_data || []).slice(0, 5).map((row, idx) => (
                   <tr key={`head-${idx}`}>
-                    {dataset.columns.map((col) => (
-                      <td key={col}>{String(row[col])}</td>
+                    {(dataset.columns || []).map((col) => (
+                      <td key={col}>{String(row[col] ?? '')}</td>
                     ))}
                   </tr>
                 ))}
@@ -79,18 +77,18 @@ export default function DatasetInspector({
                 {dataset.has_ellipsis && (
                   <tr>
                     <td
-                      colSpan={dataset.columns.length}
+                      colSpan={dataset.columns?.length || 1}
                       className="table-ellipsis-cell"
                     >
-                      ••• {dataset.hidden_count.toLocaleString()} rows hidden •••
+                      ••• {(dataset.hidden_count ?? 0).toLocaleString()} rows hidden •••
                     </td>
                   </tr>
                 )}
 
                 {(dataset.tail_rows || []).slice(-3).map((row, idx) => (
                   <tr key={`tail-${idx}`}>
-                    {dataset.columns.map((col) => (
-                      <td key={col}>{String(row[col])}</td>
+                    {(dataset.columns || []).map((col) => (
+                      <td key={col}>{String(row[col] ?? '')}</td>
                     ))}
                   </tr>
                 ))}
@@ -104,8 +102,8 @@ export default function DatasetInspector({
 
       {/* Upload Custom CSV Dropzone */}
       <label className={`upload-btn ${uploading ? 'uploading' : ''}`}>
-        <Upload size={15} className={uploading ? 'spin' : ''} />
-        <span>{uploading ? 'Processing Dataset...' : 'Upload Custom CSV Dataset'}</span>
+        <Upload size={14} className={uploading ? 'spin' : ''} />
+        <span>{uploading ? 'COOKING DATASET...' : '✦ DROP CSV OR TAP TO COOK ⚡'}</span>
         <input
           type="file"
           accept=".csv"

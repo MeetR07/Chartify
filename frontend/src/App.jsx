@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Navbar from './components/Navbar';
 import DatasetInspector from './components/DatasetInspector';
-import QuickAnalytics from './components/QuickAnalytics';
 import PromptHeroBar from './components/PromptHeroBar';
-import AestheticsStudio from './components/AestheticsStudio';
 import InteractiveCanvas from './components/InteractiveCanvas';
 import SessionHistoryDock from './components/SessionHistoryDock';
 import DatasetExplorer from './components/DatasetExplorer';
@@ -11,31 +9,35 @@ import ZoomModal from './components/ZoomModal';
 import DatasetModal from './components/DatasetModal';
 import Toast from './components/Toast';
 import Footer from './components/Footer';
-import { getDynamicQuickChips } from './utils/dynamicPrompts';
 import { THEME_STYLES, PALETTES } from './constants/themeOptions';
+import { generateAccurateChartQuery, getDynamicQuickChips } from './utils/dynamicPrompts';
 
 export default function App() {
-  const [theme, setTheme] = useState(() => localStorage.getItem('chartify_theme') || 'dark');
+  const [theme, setTheme] = useState(() => {
+    const saved = localStorage.getItem('chartify_theme');
+    return saved === 'dark' ? 'light' : (saved || 'light');
+  });
   const [dataset, setDataset] = useState(null);
   const [query, setQuery] = useState('');
+  const [selectedChartType, setSelectedChartType] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [activeChart, setActiveChart] = useState(null);
   const [sessionTokens, setSessionTokens] = useState(0);
   const [chartHistory, setChartHistory] = useState([]);
   const [zoomModal, setZoomModal] = useState(false);
+  const [viewMode, setViewMode] = useState('3d');
   const [datasetModal, setDatasetModal] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'error' });
   const [selectedStyle, setSelectedStyle] = useState('whitegrid');
-  const [selectedPalette, setSelectedPalette] = useState('deep');
+  const [selectedPalette, setSelectedPalette] = useState('butter_green');
   const [isStyleOpen, setIsStyleOpen] = useState(false);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [isRestyling, setIsRestyling] = useState(false);
   const [isDraggingHistory, setIsDraggingHistory] = useState(false);
   const [dragStartX, setDragStartX] = useState(0);
   const [dragScrollLeft, setDragScrollLeft] = useState(0);
-  const [promptCategory, setPromptCategory] = useState('all');
 
   const inputRef = useRef(null);
   const historyScrollRef = useRef(null);
@@ -83,7 +85,8 @@ export default function App() {
 
   // Handle CSV Upload
   const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
+    const inputEl = e.target;
+    const file = inputEl?.files?.[0];
     if (!file) return;
 
     const formData = new FormData();
@@ -97,29 +100,50 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        // Upload response already contains full dataset metadata —
-        // no need for a separate /api/dataset call (saves one round-trip)
-        setDataset(data);
+        // If upload response includes complete dataset metadata, use it directly;
+        // otherwise always call fetchDataset() to ensure the UI has full data
+        if (data && Array.isArray(data.numeric_columns) && Array.isArray(data.columns)) {
+          setDataset(data);
+        } else {
+          await fetchDataset();
+        }
         setToast({
-          message: `Dataset "${file.name}" loaded! (${data.row_count} rows, ${data.column_count} columns)`,
+          message: `Dataset "${file.name}" loaded! (${data.row_count || 'new'} rows, ${data.column_count || data.columns?.length || ''} columns)`,
           type: 'success'
         });
       } else {
         setToast({ message: data.detail || 'Upload failed', type: 'error' });
       }
     } catch (err) {
+      console.error('Upload error:', err);
+      // Fallback: try fetching dataset in case upload completed on backend
+      try {
+        await fetchDataset();
+      } catch (_) {}
       setToast({ message: 'Failed to upload CSV dataset', type: 'error' });
     } finally {
       setUploading(false);
       // Reset input so same file can be re-uploaded
-      e.target.value = '';
+      try {
+        if (inputEl) inputEl.value = '';
+      } catch (_) {}
     }
   };
 
   // Handle Chart Generation
-  const handleGenerate = async (queryText) => {
-    const q = queryText || query;
-    if (!q.trim() || loading) return;
+  const handleGenerate = async (queryText, styleOverride, paletteOverride) => {
+    let q = (queryText || query).trim();
+    if (!q && selectedChartType) {
+      q = `Generate a ${selectedChartType} chart`;
+    }
+    if (!q || loading) return;
+
+    if (selectedChartType && !q.toLowerCase().includes(selectedChartType)) {
+      q = `${selectedChartType} chart: ${q}`;
+    }
+
+    const effectiveStyle = styleOverride || selectedStyle;
+    const effectivePalette = paletteOverride || selectedPalette;
 
     setLoading(true);
 
@@ -129,8 +153,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: q,
-          style: selectedStyle,
-          palette: selectedPalette
+          style: effectiveStyle,
+          palette: effectivePalette
         }),
       });
 
@@ -146,7 +170,11 @@ export default function App() {
             tokens: data.tokens,
             query: q,
             result: data.result,
-            args: data.tool_args
+            args: {
+              ...data.tool_args,
+              style: effectiveStyle,
+              palette: effectivePalette
+            }
           };
           setActiveChart(newChart);
           setChartHistory((prev) => [newChart, ...prev]);
@@ -168,21 +196,13 @@ export default function App() {
     }
   };
 
-  // Dynamic Style & Palette updater with visual feedback
+  // Dynamic Style & Palette updater with instant visual feedback
   const applyStyleAndPalette = async (style, palette) => {
     setSelectedStyle(style);
     setSelectedPalette(palette);
-    if (activeChart && activeChart.args) {
-      if (restyleTimerRef.current) {
-        clearTimeout(restyleTimerRef.current);
-      }
 
-      let isDone = false;
-      restyleTimerRef.current = setTimeout(() => {
-        if (!isDone) {
-          setIsRestyling(true);
-        }
-      }, 700);
+    if (activeChart && activeChart.args) {
+      setIsRestyling(true);
 
       try {
         const res = await fetch('/api/apply-style', {
@@ -196,29 +216,41 @@ export default function App() {
         });
         const data = await res.json();
         if (res.ok && data.success) {
-          setActiveChart((prev) => ({
-            ...prev,
+          const updatedChart = {
+            ...activeChart,
             url: data.chart_url,
-            args: data.tool_args
-          }));
+            args: {
+              ...activeChart.args,
+              ...data.tool_args,
+              style: style,
+              palette: palette
+            }
+          };
+          setActiveChart(updatedChart);
           setChartHistory((prev) =>
-            prev.map((c) => (c.id === activeChart.id ? {
-              ...c,
-              url: data.chart_url,
-              args: data.tool_args
-            } : c))
+            prev.map((c) => (c.id === activeChart.id ? updatedChart : c))
           );
+          setToast({
+            message: `🎨 Applied ${palette.replace(/_/g, ' ')} palette with ${style} style!`,
+            type: 'success'
+          });
+        } else {
+          setToast({
+            message: data.detail || 'Failed to update chart styling',
+            type: 'error'
+          });
         }
       } catch (err) {
         console.error('Failed to update style and palette:', err);
+        setToast({ message: 'Error updating chart style', type: 'error' });
       } finally {
-        isDone = true;
-        if (restyleTimerRef.current) {
-          clearTimeout(restyleTimerRef.current);
-          restyleTimerRef.current = null;
-        }
         setIsRestyling(false);
       }
+    } else {
+      setToast({
+        message: `🎨 Selected ${palette.replace(/_/g, ' ')} palette! (Generate a chart to view)`,
+        type: 'info'
+      });
     }
   };
 
@@ -230,11 +262,25 @@ export default function App() {
     applyStyleAndPalette(selectedStyle, newPalette);
   };
 
+  // Surprise Me / Roll Vibe: Strictly randomizes the color palette and theme of the current chart (NEVER changes chart type or query)
   const handleRandomStyle = () => {
-    const randomStyle = THEME_STYLES[Math.floor(Math.random() * THEME_STYLES.length)].id;
-    const randomPalette = PALETTES[Math.floor(Math.random() * PALETTES.length)].id;
+    if (isRestyling) return;
+
+    const otherStyles = THEME_STYLES.filter((s) => s.id !== selectedStyle);
+    const randomStyle = otherStyles.length
+      ? otherStyles[Math.floor(Math.random() * otherStyles.length)].id
+      : THEME_STYLES[0].id;
+
+    const otherPalettes = PALETTES.filter((p) => p.id !== selectedPalette && p.id !== 'custom');
+    const randomPalette = otherPalettes.length
+      ? otherPalettes[Math.floor(Math.random() * otherPalettes.length)].id
+      : PALETTES[0].id;
+
     applyStyleAndPalette(randomStyle, randomPalette);
   };
+
+  // Surprise Me on canvas toolbar strictly randomizes the color palette & theme of the chart
+  const handleSurpriseMe = handleRandomStyle;
 
   // Download Chart PNG
   const handleDownload = (e) => {
@@ -299,6 +345,21 @@ export default function App() {
     }
   };
 
+  const handleSelectChartType = (chartType) => {
+    setSelectedChartType(chartType);
+    if (chartType) {
+      const accurateQuery = generateAccurateChartQuery(chartType, dataset);
+      if (accurateQuery) {
+        setQuery(accurateQuery);
+      }
+    } else {
+      setQuery('');
+    }
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  };
+
   const handleColumnClick = (colName) => {
     setQuery((prev) => {
       const trimmed = prev.trim();
@@ -308,9 +369,6 @@ export default function App() {
       inputRef.current.focus();
     }
   };
-
-  // Memoized dynamic chips
-  const dynamicChips = useMemo(() => getDynamicQuickChips(dataset), [dataset]);
 
   return (
     <div className="app-wrapper">
@@ -330,7 +388,7 @@ export default function App() {
 
       {/* Main Studio Dashboard */}
       <main className="dashboard-container">
-        {/* Left Sidebar: Dataset & Quick Analytics */}
+        {/* Left Sidebar: Dataset Inspector */}
         <aside className="glass-panel sidebar-panel">
           <DatasetInspector
             dataset={dataset}
@@ -338,15 +396,6 @@ export default function App() {
             setDatasetModal={setDatasetModal}
             handleFileUpload={handleFileUpload}
             uploading={uploading}
-            onColumnClick={handleColumnClick}
-          />
-
-          <QuickAnalytics
-            chips={dynamicChips}
-            promptCategory={promptCategory}
-            setPromptCategory={setPromptCategory}
-            onChipClick={handleChipClick}
-            loading={loading}
           />
         </aside>
 
@@ -356,35 +405,30 @@ export default function App() {
           <PromptHeroBar
             query={query}
             setQuery={setQuery}
+            selectedChartType={selectedChartType}
+            onSelectChartType={handleSelectChartType}
             loading={loading}
             handleGenerate={handleGenerate}
             inputRef={inputRef}
+            handleFileUpload={handleFileUpload}
+            uploading={uploading}
           />
 
-          {/* Chart Aesthetics Studio */}
-          <AestheticsStudio
-            selectedStyle={selectedStyle}
-            selectedPalette={selectedPalette}
-            handleStyleChange={handleStyleChange}
-            handlePaletteChange={handlePaletteChange}
-            handleRandomStyle={handleRandomStyle}
-            isStyleOpen={isStyleOpen}
-            setIsStyleOpen={setIsStyleOpen}
-            isPaletteOpen={isPaletteOpen}
-            setIsPaletteOpen={setIsPaletteOpen}
-            isRestyling={isRestyling}
-            styleBoxRef={styleBoxRef}
-            paletteBoxRef={paletteBoxRef}
-          />
-
-          {/* Interactive Chart Canvas */}
+          {/* Interactive Chart Canvas with Surprise Me on far left */}
           <InteractiveCanvas
             activeChart={activeChart}
+            dataset={dataset}
+            selectedPalette={selectedPalette}
+            selectedStyle={selectedStyle}
             loading={loading}
             isRestyling={isRestyling}
             handleDownload={handleDownload}
             setZoomModal={setZoomModal}
             onQuickPrompt={handleChipClick}
+            handleRandomStyle={handleRandomStyle}
+            handleSurpriseMe={handleSurpriseMe}
+            viewMode={viewMode}
+            setViewMode={setViewMode}
           />
 
           {/* Session History Carousel Dock */}
@@ -415,6 +459,10 @@ export default function App() {
       {/* Fullscreen Zoom Modal */}
       <ZoomModal
         activeChart={activeChart}
+        dataset={dataset}
+        selectedPalette={selectedPalette}
+        selectedStyle={selectedStyle}
+        viewMode={viewMode}
         isOpen={zoomModal}
         onClose={() => setZoomModal(false)}
         onDownload={handleDownload}

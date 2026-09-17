@@ -29,6 +29,9 @@ yarn-error.log*
 restore_css.py
 frontend/restore_css.py
 
+# Temporary generated chart files
+*.png
+
 # IDE / OS
 .vscode/
 .idea/

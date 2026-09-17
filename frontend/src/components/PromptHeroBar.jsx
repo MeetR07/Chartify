@@ -1,15 +1,58 @@
-import React from 'react';
-import { Sparkles, X, RefreshCw, Send } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Sparkles, X, RefreshCw, Flame, ChevronDown, Search, Paperclip, ArrowRight } from 'lucide-react';
+
+const CHART_TYPES = [
+  { value: '', label: 'All Charts (Auto)' },
+  { value: 'bar', label: 'Bar Chart' },
+  { value: 'line', label: 'Line Chart' },
+  { value: 'scatter', label: 'Scatter Plot' },
+  { value: 'histogram', label: 'Histogram' },
+  { value: 'box', label: 'Box Plot' },
+  { value: 'heatmap', label: 'Heatmap' },
+  { value: 'pie', label: 'Pie Chart' },
+  { value: 'donut', label: 'Donut Chart' },
+  { value: 'area', label: 'Area Chart' },
+  { value: 'violin', label: 'Violin Plot' },
+  { value: 'treemap', label: 'Treemap' },
+  { value: 'waterfall', label: 'Waterfall' },
+  { value: 'funnel', label: 'Funnel Chart' },
+  { value: 'lollipop', label: 'Lollipop' },
+  { value: 'radar', label: 'Radar Chart' },
+  { value: 'bubble', label: 'Bubble Chart' },
+  { value: 'pairplot', label: 'Pairplot' }
+];
 
 export default function PromptHeroBar({
   query,
   setQuery,
+  selectedChartType = '',
+  onSelectChartType = () => {},
   loading,
   handleGenerate,
-  inputRef
+  inputRef,
+  handleFileUpload,
+  uploading = false
 }) {
+  const fileInputRef = useRef(null);
+
+  const activeLabel = selectedChartType
+    ? `${selectedChartType.toUpperCase()} CHART`
+    : 'ALL CHARTS (AUTO)';
+
   return (
     <div className="prompt-bar-wrapper">
+      {/* Hidden File Input for Paperclip Upload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv"
+        onChange={(e) => {
+          if (handleFileUpload) handleFileUpload(e);
+          e.target.value = '';
+        }}
+        style={{ display: 'none' }}
+      />
+
       <form
         className="prompt-bar-container"
         onSubmit={(e) => {
@@ -17,20 +60,35 @@ export default function PromptHeroBar({
           handleGenerate();
         }}
       >
-        {/* Left AI Orb & Badge */}
-        <div className="prompt-left-badge">
-          <div className="prompt-orb" aria-hidden="true">
-            <Sparkles className="prompt-icon" size={14} />
-          </div>
-          <span className="prompt-hub-tag">AI Query</span>
+        {/* Left Chart Type Select Pill */}
+        <div className="prompt-left-badge" title="Select Chart Type">
+          <Sparkles size={14} className="prompt-badge-sparkle" aria-hidden="true" />
+          <span className="prompt-badge-text">{activeLabel}</span>
+          <ChevronDown size={13} className="select-chevron" aria-hidden="true" />
+          <select
+            className="chart-type-select"
+            value={selectedChartType}
+            onChange={(e) => onSelectChartType(e.target.value)}
+            disabled={loading}
+            aria-label="Select Chart Type"
+          >
+            {CHART_TYPES.map((ct) => (
+              <option key={ct.value} value={ct.value}>
+                {ct.label}
+              </option>
+            ))}
+          </select>
         </div>
+
+        {/* Magnifying Search Icon */}
+        <Search size={16} className="prompt-search-icon" aria-hidden="true" />
 
         {/* Input */}
         <input
           ref={inputRef}
           type="text"
           className="prompt-input"
-          placeholder="Ask anything... e.g. 'Bar chart of Sales by Month' or 'Correlation Heatmap'..."
+          placeholder="Ask anything, no cap... e.g. 'Violin plot of total_bill with neon aura' 🔥"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           disabled={loading}
@@ -55,23 +113,35 @@ export default function PromptHeroBar({
           </button>
         )}
 
-        {/* Submit Button */}
+        {/* Attachment Paperclip Button */}
+        <button
+          type="button"
+          className="prompt-attach-btn"
+          onClick={() => fileInputRef.current?.click()}
+          title="Attach / Upload CSV dataset"
+          aria-label="Upload CSV dataset"
+          disabled={uploading || loading}
+        >
+          <Paperclip size={16} className={uploading ? 'spin' : ''} />
+        </button>
+
+        {/* Cook Chart Submit Button */}
         <button
           type="submit"
           className="submit-btn"
-          disabled={loading || !query.trim()}
-          aria-label="Generate Chart"
+          disabled={loading || (!query.trim() && !selectedChartType)}
+          aria-label="Cook Chart"
         >
           {loading ? (
             <>
-              <RefreshCw size={15} className="spin" />
-              <span>Analyzing...</span>
+              <RefreshCw size={14} className="spin" />
+              <span>COOKING...</span>
             </>
           ) : (
             <>
-              <span>Generate Chart</span>
-              <Send size={14} />
-              <kbd className="prompt-enter-kbd" title="Press Enter to generate">↵</kbd>
+              <Flame size={15} className="submit-btn-flame" />
+              <span>COOK CHART</span>
+              <ArrowRight size={15} className="submit-btn-arrow" />
             </>
           )}
         </button>

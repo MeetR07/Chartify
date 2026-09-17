@@ -25,7 +25,7 @@ export default function AestheticsStudio({
       <div className="studio-header">
         <div className="studio-header-title">
           <Sliders size={14} className="studio-header-icon" aria-hidden="true" />
-          <span>Chart Aesthetics Studio</span>
+          <span>Aesthetics Lab // Vibe Check 🎨</span>
         </div>
 
         <div className="studio-header-right">
@@ -66,7 +66,7 @@ export default function AestheticsStudio({
             title="Toggle both Theme and Palette menus simultaneously"
           >
             <Layers size={12} />
-            <span>{isStyleOpen && isPaletteOpen ? 'Close Both' : 'Open Both Menus'}</span>
+            <span>{isStyleOpen && isPaletteOpen ? 'Close Menus' : 'Customize Both'}</span>
           </button>
 
           {/* Surprise Me / Randomize Button */}
@@ -75,10 +75,10 @@ export default function AestheticsStudio({
             className="studio-tool-btn surprise-btn"
             onClick={handleRandomStyle}
             disabled={isRestyling}
-            title="Randomize aesthetic style and color palette combination"
+            title="Roll random aesthetic style and color palette combination"
           >
             <Shuffle size={12} className={isRestyling ? 'spin' : ''} />
-            <span>Surprise Me</span>
+            <span>🎲 ROLL VIBE</span>
             {isRestyling && (
               <span className="bouncing-dots inline">
                 <span className="dot dot-1"></span>

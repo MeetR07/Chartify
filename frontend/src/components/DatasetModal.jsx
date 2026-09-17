@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Database, X, Search } from 'lucide-react';
 
 export default function DatasetModal({
@@ -18,15 +18,17 @@ export default function DatasetModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  if (!isOpen || !dataset) return null;
-
-  const rowsToDisplay = tableSearch
-    ? (dataset.sample_data || []).filter((row) =>
-        Object.values(row).some((val) =>
-          String(val).toLowerCase().includes(tableSearch.toLowerCase())
-        )
+  const searchLower = (tableSearch || '').trim().toLowerCase();
+  const rowsToDisplay = useMemo(() => {
+    if (!searchLower) return dataset?.sample_data || [];
+    return (dataset?.sample_data || []).filter((row) =>
+      Object.values(row).some((val) =>
+        String(val ?? '').toLowerCase().includes(searchLower)
       )
-    : dataset.sample_data || [];
+    );
+  }, [dataset?.sample_data, searchLower]);
+
+  if (!isOpen || !dataset) return null;
 
   return (
     <div className="modal-backdrop" onClick={onClose} role="dialog" aria-modal="true" aria-label="Fullscreen Dataset Inspector">
@@ -38,8 +40,8 @@ export default function DatasetModal({
             <div>
               <h3 className="modal-heading">Dataset Fullscreen Inspector</h3>
               <div className="modal-subheading">
-                {dataset.row_count.toLocaleString()} Total Rows • {dataset.column_count} Columns •{' '}
-                {dataset.numeric_columns.length} Numeric Features
+                {dataset.row_count != null ? dataset.row_count.toLocaleString() : 0} Total Rows • {dataset.column_count ?? dataset.columns?.length ?? 0} Columns •{' '}
+                {dataset.numeric_columns?.length ?? 0} Numeric Features
               </div>
             </div>
           </div>
@@ -84,12 +86,12 @@ export default function DatasetModal({
             <thead>
               <tr>
                 <th style={{ width: '50px', textAlign: 'center' }}>#</th>
-                {dataset.columns.map((col) => (
+                {(dataset.columns || []).map((col) => (
                   <th key={col}>
                     <div className="col-th-inner">
                       <span>{col}</span>
                       <span className="col-th-badge">
-                        {dataset.numeric_columns.includes(col) ? '(num)' : '(str)'}
+                        {dataset.numeric_columns?.includes(col) ? '(num)' : '(str)'}
                       </span>
                     </div>
                   </th>
@@ -99,7 +101,7 @@ export default function DatasetModal({
             <tbody>
               {rowsToDisplay.length === 0 ? (
                 <tr>
-                  <td colSpan={dataset.columns.length + 1} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
+                  <td colSpan={(dataset.columns?.length || 0) + 1} style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
                     No rows match query "{tableSearch}"
                   </td>
                 </tr>
@@ -109,12 +111,12 @@ export default function DatasetModal({
                     <td style={{ textAlign: 'center', opacity: 0.5, fontFamily: 'var(--font-mono)' }}>
                       {row._row_idx || idx + 1}
                     </td>
-                    {dataset.columns.map((col) => (
+                    {(dataset.columns || []).map((col) => (
                       <td
                         key={col}
-                        className={dataset.numeric_columns.includes(col) ? 'mono-cell' : ''}
+                        className={dataset.numeric_columns?.includes(col) ? 'mono-cell' : ''}
                       >
-                        {String(row[col])}
+                        {String(row[col] ?? '')}
                       </td>
                     ))}
                   </tr>
