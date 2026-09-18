@@ -10,7 +10,6 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")  # Use non-interactive, thread-safe Agg backend for servers
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyBboxPatch, Circle
 import seaborn as sns
 
 try:
@@ -485,258 +484,59 @@ def generate_chart(
                         except Exception:
                             pass
             else:
-                # Close default simple figure and generate Executive Infographic Dashboard Card
-                plt.close(fig)
-
-                # Order categories: highest value first (at index 0)
+                # Studio Horizontal Bar Chart (Linear / Stripe / Apple Health design)
+                is_horizontal_bar = True
+                
+                # Order categories: ascending=True puts highest value at top bar (y=N-1) in ax.barh
+                # for ranking_asc (lowest), ascending=False puts lowest value at top bar
                 if effective_y and effective_y in plot_df.columns:
                     if query_op == "ranking_asc":
-                        plot_df = plot_df.sort_values(by=effective_y, ascending=True).reset_index(drop=True)
-                    else:
                         plot_df = plot_df.sort_values(by=effective_y, ascending=False).reset_index(drop=True)
-
-                plot_df = plot_df.head(8)
+                    else:
+                        plot_df = plot_df.sort_values(by=effective_y, ascending=True).reset_index(drop=True)
+                
                 categories = plot_df[x_col].astype(str).tolist() if x_col and x_col in plot_df.columns else []
-                values = [float(v) for v in (plot_df[effective_y].tolist() if effective_y and effective_y in plot_df.columns else [])]
+                values = plot_df[effective_y].tolist() if effective_y and effective_y in plot_df.columns else []
+                
                 n_items = len(categories)
-
-                info_fig = plt.figure(figsize=(13.4, 7.4), dpi=130)
-                card_bg_color = "#070d1e"
-                info_fig.patch.set_facecolor(card_bg_color)
-
-                gs = info_fig.add_gridspec(
-                    nrows=2, ncols=2,
-                    width_ratios=[2.25, 0.95],
-                    height_ratios=[0.14, 0.86],
-                    left=0.04, right=0.96, top=0.93, bottom=0.09,
-                    wspace=0.12, hspace=0.12
-                )
-
-                ax_hdr_l = info_fig.add_subplot(gs[0, 0])
-                ax_hdr_r = info_fig.add_subplot(gs[0, 1])
-                ax_main = info_fig.add_subplot(gs[1, 0])
-                ax_side = info_fig.add_subplot(gs[1, 1])
-
-                for a in [ax_hdr_l, ax_hdr_r, ax_side]:
-                    a.set_facecolor(card_bg_color)
-                    a.axis("off")
-                ax_main.set_facecolor(card_bg_color)
-
-                # --- 1. HEADER LEFT (Icon Badge + Title + Subtitle) ---
-                icon_box = FancyBboxPatch(
-                    (0.01, 0.08), 0.085, 0.84,
-                    boxstyle="round,pad=0.015,rounding_size=0.08",
-                    facecolor="#181e42", edgecolor="#4338ca", linewidth=1.5,
-                    transform=ax_hdr_l.transAxes, clip_on=False
-                )
-                ax_hdr_l.add_patch(icon_box)
-
-                for bx, bh in zip([0.030, 0.048, 0.066], [0.32, 0.62, 0.44]):
-                    ax_hdr_l.add_patch(FancyBboxPatch(
-                        (bx, 0.18), 0.009, bh,
-                        boxstyle="round,pad=0.003,rounding_size=0.01",
-                        facecolor="#818cf8", edgecolor="none",
-                        transform=ax_hdr_l.transAxes
-                    ))
-
-                display_title = title if title and title != "Data Analysis Chart" else f"{effective_y.replace('_', ' ').title()} by {x_col.replace('_', ' ').title()}"
-                ax_hdr_l.text(
-                    0.12, 0.66, display_title,
-                    fontsize=17.5, weight="bold", color="#ffffff",
-                    transform=ax_hdr_l.transAxes, va="center"
-                )
-                ax_hdr_l.text(
-                    0.12, 0.25, f"Monthly {effective_y.lower()} performance and ranking analysis",
-                    fontsize=10.5, color="#94a3b8",
-                    transform=ax_hdr_l.transAxes, va="center"
-                )
-
-                # --- 2. HEADER RIGHT (KPI Pill - NO Avg box) ---
-                kpi_box = FancyBboxPatch(
-                    (0.48, 0.08), 0.50, 0.84,
-                    boxstyle="round,pad=0.02,rounding_size=0.15",
-                    facecolor="#05281e", edgecolor="#059669", linewidth=1.3,
-                    transform=ax_hdr_r.transAxes, clip_on=False
-                )
-                ax_hdr_r.add_patch(kpi_box)
-
-                diff_pct = 0.0
-                if len(values) >= 2 and values[1] > 0:
-                    diff_pct = ((values[0] - values[1]) / values[1]) * 100
-
-                kpi_text = f"↑ +{diff_pct:.1f}%" if diff_pct > 0 else (f"Top: {format_num_human(values[0])}" if values else "Active")
-                ax_hdr_r.text(
-                    0.58, 0.65, kpi_text,
-                    fontsize=11.5, weight="bold", color="#34d399",
-                    transform=ax_hdr_r.transAxes, va="center"
-                )
-                ax_hdr_r.text(
-                    0.58, 0.26, "vs. last rank" if diff_pct > 0 else "leading metric",
-                    fontsize=8.5, color="#6ee7b7",
-                    transform=ax_hdr_r.transAxes, va="center"
-                )
-
-                # --- 3. MAIN CHART (Horizontal Bars with Smooth Pill Rounding) ---
-                categories_rev = categories[::-1]
-                values_rev = values[::-1]
-
-                ref_palette = ["#38bdf8", "#fb923c", "#2dd4bf", "#fb7185", "#8b5cf6", "#a855f7", "#ec4899", "#10b981"]
-                if palette and palette.lower() in MODERN_PALETTES:
-                    bar_colors = resolve_palette_colors(palette, max(n_items, 4))[::-1]
-                else:
-                    bar_colors = ref_palette[:n_items]
+                bar_colors = resolve_palette_colors(palette, max(n_items, 4))
                 if len(bar_colors) < n_items:
                     bar_colors = (bar_colors * (n_items // len(bar_colors) + 1))[:n_items]
 
-                y_pos = np.arange(n_items)
-                max_v = max(values_rev) * 1.18 if values_rev and max(values_rev) > 0 else 1.0
+                y_positions = np.arange(n_items)
+                bar_height = 0.62
 
-                y_min_bound = -0.6
-                y_max_bound = n_items - 0.4
-                y_range = max(1e-5, y_max_bound - y_min_bound)
+                bars = ax.barh(
+                    y_positions,
+                    values,
+                    height=bar_height,
+                    color=bar_colors[:n_items],
+                    edgecolor="none"
+                )
 
-                ax_main.set_xlim(0, max_v)
-                ax_main.set_ylim(y_min_bound, y_max_bound)
+                ax.set_yticks(y_positions)
+                ax.set_yticklabels(categories, fontsize=10, weight="bold", color=text_color)
 
-                ax_main.xaxis.grid(True, linestyle=":", color="#172544", linewidth=1.2, alpha=0.9)
-                ax_main.yaxis.grid(False)
-                ax_main.set_axisbelow(True)
+                max_val = max(values) if values and max(values) > 0 else 1
+                ax.set_xlim(0, max_val * 1.18)
 
-                for spine in ["top", "right", "left"]:
-                    ax_main.spines[spine].set_visible(False)
-                ax_main.spines["bottom"].set_color("#1e293b")
-                ax_main.spines["bottom"].set_linewidth(1.2)
-
-                bar_h = 0.58
-                h_norm = bar_h / y_range
-
-                for i, (cat, val, color) in enumerate(zip(categories_rev, values_rev, bar_colors)):
-                    w_norm = max(1e-5, val / max_v)
-                    y_center_norm = (i - y_min_bound) / y_range
-                    y_bottom_norm = y_center_norm - (h_norm / 2)
-
-                    p_box = FancyBboxPatch(
-                        (0.0, y_bottom_norm),
-                        w_norm,
-                        h_norm,
-                        boxstyle="round,pad=0.0,rounding_size=0.04",
-                        facecolor=color,
-                        edgecolor="none",
-                        alpha=0.96,
-                        transform=ax_main.transAxes,
-                        clip_on=False
-                    )
-                    ax_main.add_patch(p_box)
-
-                    val_label = format_num_human(val)
-                    ax_main.text(
-                        val + (max_v * 0.025),
-                        i,
-                        val_label,
-                        fontsize=11,
-                        weight="bold",
-                        color="#ffffff",
+                # Direct crisp value labels on each bar tip
+                for bar, val in zip(bars, values):
+                    w = bar.get_width()
+                    y_pos = bar.get_y() + bar.get_height() / 2
+                    ax.text(
+                        w + (max_val * 0.02),
+                        y_pos,
+                        f"{format_num_human(val)}",
                         va="center",
-                        ha="left"
+                        ha="left",
+                        fontsize=9.5,
+                        weight="bold",
+                        color=text_color
                     )
 
-                ax_main.set_yticks(y_pos)
-                ax_main.set_yticklabels(categories_rev, fontsize=11.5, weight="bold", color="#ffffff")
-                ax_main.tick_params(axis="y", length=0, pad=14)
-
-                ax_main.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: format_num_human(v) if v > 0 else "0"))
-                ax_main.set_xlabel(effective_y.replace("_", " ").title() if effective_y else "Value", fontsize=11, color="#94a3b8", labelpad=12)
-                ax_main.tick_params(axis="x", colors="#64748b", length=4, width=1.2)
-
-                # --- 4. RIGHT SIDE INFO CARDS ---
-                # Top Card: Breakdown Table
-                card1_bg = FancyBboxPatch(
-                    (0.02, 0.44), 0.96, 0.54,
-                    boxstyle="round,pad=0.03,rounding_size=0.06",
-                    facecolor="#0a1329", edgecolor="#1e2c4f", linewidth=1.4,
-                    transform=ax_side.transAxes, clip_on=False
-                )
-                ax_side.add_patch(card1_bg)
-
-                ax_side.text(
-                    0.08, 0.91, f"{x_col.replace('_', ' ').title()} Ranking",
-                    fontsize=12.5, weight="bold", color="#ffffff",
-                    transform=ax_side.transAxes
-                )
-
-                row_ys = np.linspace(0.79, 0.50, len(categories))
-                for y_coord, cat, val, col in zip(row_ys, categories, values, bar_colors[::-1]):
-                    ax_side.scatter(
-                        [0.10], [y_coord], s=75,
-                        color=col, edgecolors="none",
-                        transform=ax_side.transAxes, clip_on=False, zorder=5
-                    )
-                    ax_side.text(
-                        0.18, y_coord, cat,
-                        fontsize=10.5, color="#cbd5e1",
-                        transform=ax_side.transAxes, va="center"
-                    )
-                    ax_side.text(
-                        0.90, y_coord, format_num_human(val),
-                        fontsize=10.5, weight="bold", color="#ffffff",
-                        transform=ax_side.transAxes, va="center", ha="right"
-                    )
-
-                # Bottom Card: Key Insight
-                card2_bg = FancyBboxPatch(
-                    (0.02, 0.02), 0.96, 0.38,
-                    boxstyle="round,pad=0.03,rounding_size=0.06",
-                    facecolor="#071929", edgecolor="#0d9488", linewidth=1.4,
-                    transform=ax_side.transAxes, clip_on=False
-                )
-                ax_side.add_patch(card2_bg)
-
-                ax_side.scatter(
-                    [0.10], [0.31], s=110,
-                    color="#0f766e", edgecolors="#2dd4bf", linewidths=1.2,
-                    transform=ax_side.transAxes, clip_on=False, zorder=5
-                )
-                ax_side.text(
-                    0.10, 0.31, "*",
-                    fontsize=11, weight="bold", color="#2dd4bf",
-                    ha="center", va="center", transform=ax_side.transAxes, zorder=6
-                )
-                ax_side.text(
-                    0.18, 0.31, "Key Insight",
-                    fontsize=11.5, weight="bold", color="#2dd4bf",
-                    transform=ax_side.transAxes, va="center"
-                )
-
-                top_cat = categories[0] if categories else "Top"
-                top_val_str = format_num_human(values[0]) if values else "0"
-                runner_cat = categories[1] if len(categories) > 1 else ""
-                runner_val_str = format_num_human(values[1]) if len(values) > 1 else ""
-
-                if runner_cat:
-                    insight_str = (
-                        f"{top_cat} recorded peak performance at\n"
-                        f"{top_val_str}, leading {runner_cat} ({runner_val_str})\n"
-                        f"by +{diff_pct:.1f}% and driving top momentum."
-                    )
-                else:
-                    insight_str = f"{top_cat} achieved {top_val_str} total volume."
-
-                ax_side.text(
-                    0.08, 0.16, insight_str,
-                    fontsize=9.2, color="#94a3b8", linespacing=1.45,
-                    transform=ax_side.transAxes, va="center"
-                )
-
-                # Save & return data URL directly
-                buf = io.BytesIO()
-                info_fig.savefig(buf, format="png", dpi=130, facecolor=card_bg_color, bbox_inches="tight")
-                plt.close(info_fig)
-                buf.seek(0)
-                data_url = f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode('utf-8')}"
-                if output_path and output_path != ":memory:":
-                    with open(output_path, "wb") as f:
-                        f.write(buf.getvalue())
-                return data_url
+                ax.set_xlabel(effective_y.replace("_", " ").title() if effective_y else "Value", fontsize=10, color=muted_color, labelpad=8)
+                ax.set_ylabel("")
 
         # --------------------------------------------------------------------------
         # Chart 2: Line Chart (Trends with smooth area glow & high-contrast points)
