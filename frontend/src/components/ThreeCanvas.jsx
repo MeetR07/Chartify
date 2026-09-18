@@ -893,16 +893,14 @@ function build3DCard(group, activeChart, wireframe, interactiveList, accentColor
 
   // 3. Front Chart Canvas / Plane (where 2D chart is glued)
   const frontGeo = new THREE.PlaneGeometry(cardWidth, initialCardHeight);
-  const frontMat = new THREE.MeshStandardMaterial({
+  const frontMat = new THREE.MeshBasicMaterial({
     color: 0xffffff,
-    roughness: 0.2,
-    metalness: 0.05,
     wireframe: wireframe,
     side: THREE.FrontSide
   });
   const frontMesh = new THREE.Mesh(frontGeo, frontMat);
   frontMesh.position.z = depth / 2 + 0.015;
-  frontMesh.receiveShadow = true;
+  frontMesh.receiveShadow = false;
   cardGroup.add(frontMesh);
 
   // Load 2D chart image texture
