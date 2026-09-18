@@ -12,7 +12,6 @@ import Footer from './components/Footer';
 import { THEME_STYLES, PALETTES } from './constants/themeOptions';
 import { generateAccurateChartQuery, getDynamicQuickChips } from './utils/dynamicPrompts';
 import { parseCSVClientSide } from './utils/csvParser';
-import { generateClient2DChartSvg } from './utils/svgChartGenerator';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
@@ -192,7 +191,6 @@ export default function App() {
     const effectivePalette = paletteOverride || selectedPalette;
 
     setLoading(true);
-    let backendSuccess = false;
 
     // 1. Try connecting to Python LLM backend
     try {
@@ -226,61 +224,24 @@ export default function App() {
           setActiveChart(newChart);
           setChartHistory((prev) => [newChart, ...prev]);
           setSessionTokens((prev) => prev + (data.tokens?.total || 0));
-          backendSuccess = true;
+        } else {
+          setToast({
+            message: data.detail || 'Chart generation tool failed to produce a chart',
+            type: 'error'
+          });
         }
+      } else {
+        setToast({
+          message: 'Server error while generating chart',
+          type: 'error'
+        });
       }
-    } catch (_) {
-      // Backend not reached or offline
-    }
-
-    // 2. Intelligent Client-Side 3D Generator (Works directly on phone/Vercel without backend)
-    if (!backendSuccess) {
-      const curData = dataset || DEFAULT_DATASET;
-      const qLower = q.toLowerCase();
-
-      // Detect chart type
-      let cType = selectedChartType || 'bar';
-      const knownTypes = ['bar', 'line', 'scatter', 'histogram', 'box', 'heatmap', 'pie', 'donut', 'area', 'violin', 'treemap', 'waterfall', 'funnel', 'lollipop', 'radar', 'bubble', 'pairplot'];
-      for (const t of knownTypes) {
-        if (qLower.includes(t)) {
-          cType = t;
-          break;
-        }
-      }
-
-      const numCols = curData.numeric_columns || [];
-      const catCols = curData.categorical_columns || [];
-      const xCol = catCols[0] || curData.columns?.[0] || 'Month';
-      const yCol = numCols[0] || curData.columns?.[1] || 'Sales';
-      const hueCol = catCols.length > 1 ? catCols[1] : null;
-
-      const fallbackTitle = `${cType.toUpperCase()} of ${yCol} by ${xCol}`;
-      const fallbackArgs = {
-        chart_type: cType,
-        x_col: xCol,
-        y_col: yCol,
-        hue_col: hueCol,
-        title: fallbackTitle,
-        style: effectiveStyle,
-        palette: effectivePalette
-      };
-      const svgUrl = generateClient2DChartSvg({ chart_type: cType, title: fallbackTitle, args: fallbackArgs }, curData);
-
-      const fallbackChart = {
-        id: Date.now(),
-        url: svgUrl,
-        chart_type: cType,
-        title: fallbackTitle,
-        tokens: { prompt: 18, completion: 45, total: 63 },
-        query: q,
-        result: `Rendered dynamic 3D ${cType} visualization of ${yCol} across ${xCol}`,
-        args: fallbackArgs
-      };
-
-      setActiveChart(fallbackChart);
-      setChartHistory((prev) => [fallbackChart, ...prev]);
-      setSessionTokens((prev) => prev + 63);
-      setViewMode('3d');
+    } catch (err) {
+      console.error('Chart generation error:', err);
+      setToast({
+        message: 'Backend chart service is offline or unreachable.',
+        type: 'error'
+      });
     }
 
     setLoading(false);
@@ -379,18 +340,15 @@ export default function App() {
       e.preventDefault();
       e.stopPropagation();
     }
-    const downloadUrl = activeChart?.url || (activeChart && dataset ? generateClient2DChartSvg(activeChart, dataset) : '');
-    if (!downloadUrl) return;
+    if (!activeChart?.url) return;
     try {
-      const isSvg = downloadUrl.startsWith('data:image/svg+xml');
-      const ext = isSvg ? 'svg' : 'png';
       const tempLink = document.createElement('a');
-      tempLink.href = downloadUrl;
-      tempLink.download = `${activeChart.chart_type || 'chart'}.${ext}`;
+      tempLink.href = activeChart.url;
+      tempLink.download = `${activeChart.chart_type || 'chart'}.png`;
       document.body.appendChild(tempLink);
       tempLink.click();
       document.body.removeChild(tempLink);
-      setToast({ message: `High-res ${ext.toUpperCase()} downloaded successfully!`, type: 'success' });
+      setToast({ message: 'High-res PNG downloaded successfully!', type: 'success' });
     } catch (err) {
       console.error('Download failed:', err);
       setToast({ message: 'Chart download failed', type: 'error' });
