@@ -11,7 +11,6 @@ export default function Navbar({ theme, setTheme, sessionTokens }) {
         <div className="brand-info">
           <div className="brand-title-row">
             <span className="brand-title">Chartify</span>
-            <span className="brand-badge">GEN-Z STUDIO ✦</span>
           </div>
         </div>
       </div>
