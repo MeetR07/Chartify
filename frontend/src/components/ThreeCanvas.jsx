@@ -1021,6 +1021,11 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
     return;
   }
 
+  // Mount 2D chart card as physical coordinate backdrop panel behind 3D chart elements
+  if (activeChart?.url) {
+    build2DBackdropCard(chartGroup, activeChart, wireframe, accentColor, isDark);
+  }
+
   const allRows = dataset?.sample_data?.length ? dataset.sample_data : (dataset?.head_rows || []);
   const args = activeChart?.args || {};
 
@@ -1103,8 +1108,105 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
     build3DHeatmap(chartGroup, dataPoints, wireframe, interactiveList, paletteColors, showLabels, isDark);
   } else {
     // Bar, lollipop, waterfall fallback to 3D Columns
-    build3DBar(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol);
+    build3DBar(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, Boolean(activeChart?.url));
   }
+}
+
+/**
+ * 2D Chart Backdrop Card
+ * Takes the exact 2D chart (with real X & Y axes, labels, ticks, and coordinates) from the backend
+ * and mounts it on a sleek physical holographic panel directly behind the 3D interactive chart elements.
+ */
+function build2DBackdropCard(group, activeChart, wireframe, accentColor, isDark) {
+  if (!activeChart?.url) return;
+
+  const cardGroup = new THREE.Group();
+  // Position behind 3D chart elements
+  cardGroup.position.set(0, 5.0, -2.4);
+
+  const cardWidth = 18.5;
+  const initialCardHeight = 10.2;
+  const depth = 0.28;
+
+  // 1. Dark Glass Backplate
+  const slabGeo = new THREE.BoxGeometry(cardWidth + 0.4, initialCardHeight + 0.4, depth);
+  const slabMat = new THREE.MeshStandardMaterial({
+    color: 0x091224,
+    roughness: 0.35,
+    metalness: 0.65,
+    wireframe: wireframe
+  });
+  const slab = new THREE.Mesh(slabGeo, slabMat);
+  slab.receiveShadow = true;
+  cardGroup.add(slab);
+
+  // 2. Glowing Neon Border Rim
+  const frameGeo = new THREE.BoxGeometry(cardWidth + 0.65, initialCardHeight + 0.65, depth * 0.7);
+  const frameMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.45,
+    roughness: 0.2,
+    metalness: 0.85,
+    wireframe: wireframe
+  });
+  const frame = new THREE.Mesh(frameGeo, frameMat);
+  frame.position.z = -0.04;
+  cardGroup.add(frame);
+
+  // 3. Front 2D Chart Plane (Displays the real 2D chart from charts.py with exact X & Y axes)
+  const frontGeo = new THREE.PlaneGeometry(cardWidth, initialCardHeight);
+  const frontMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.94,
+    side: THREE.FrontSide
+  });
+  const frontMesh = new THREE.Mesh(frontGeo, frontMat);
+  frontMesh.position.z = depth / 2 + 0.015;
+  frontMesh.receiveShadow = false;
+  cardGroup.add(frontMesh);
+
+  // 4. Pedestal Stand on the Floor
+  const baseGeo = new THREE.BoxGeometry(cardWidth + 1.2, 0.22, 1.4);
+  const baseMat = new THREE.MeshStandardMaterial({
+    color: 0x0d1a33,
+    metalness: 0.85,
+    roughness: 0.2
+  });
+  const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+  baseMesh.position.set(0, -5.0 + 0.11, 0);
+  cardGroup.add(baseMesh);
+
+  // Load 2D chart image from activeChart.url
+  const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin('anonymous');
+  loader.load(
+    activeChart.url,
+    (texture) => {
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+
+      frontMat.map = texture;
+      frontMat.needsUpdate = true;
+
+      if (texture.image && texture.image.width && texture.image.height) {
+        const imgAspect = texture.image.width / texture.image.height;
+        const newHeight = cardWidth / imgAspect;
+        frontMesh.scale.set(1, newHeight / initialCardHeight, 1);
+        slab.scale.set(1, (newHeight + 0.4) / (initialCardHeight + 0.4), 1);
+        frame.scale.set(1, (newHeight + 0.65) / (initialCardHeight + 0.65), 1);
+        cardGroup.position.y = newHeight / 2 + 0.15;
+        baseMesh.position.y = -(newHeight / 2 + 0.15) + 0.11;
+      }
+    },
+    undefined,
+    (err) => console.warn('Error loading 2D chart backdrop texture:', err)
+  );
+
+  group.add(cardGroup);
 }
 
 /**
@@ -1289,7 +1391,8 @@ function build3DBar(
   showLabels = true,
   isDark = true,
   xLabel = 'Month',
-  yLabel = 'Sales'
+  yLabel = 'Sales',
+  hasBackdrop = false
 ) {
   const count = data.length;
   // Calculate dynamic spacing and width
@@ -1410,52 +1513,54 @@ function build3DBar(
   xTitleSprite.position.set((minX + maxX) / 2, -1.05, maxZ + 0.75);
   group.add(xTitleSprite);
 
-  // 4. Vertical Y-Axis (Line, Ticks, Labels, Title)
-  const yAxisX = minX - 0.65;
-  const yAxisHeight = maxHeight * 1.06;
+  // 4. Vertical Y-Axis (Line, Ticks, Labels, Title) - only if no 2D backdrop card
+  if (!hasBackdrop) {
+    const yAxisX = minX - 0.65;
+    const yAxisHeight = maxHeight * 1.06;
 
-  // Vertical glowing line
-  const yLineGeo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(yAxisX, 0.02, maxZ),
-    new THREE.Vector3(yAxisX, yAxisHeight, maxZ)
-  ]);
-  const yLineMat = new THREE.LineBasicMaterial({
-    color: 0x38bdf8,
-    transparent: true,
-    opacity: 0.85,
-    linewidth: 2
-  });
-  group.add(new THREE.Line(yLineGeo, yLineMat));
-
-  // Y-Axis Ticks & Values
-  const tickCount = 6;
-  const tickStep = maxVal / (tickCount - 1);
-  for (let t = 0; t < tickCount; t++) {
-    const tickVal = t * tickStep;
-    const tickY = Math.max((tickVal / maxVal) * maxHeight, 0.02);
-
-    // Tick Mark
-    const tickGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(yAxisX, tickY, maxZ),
-      new THREE.Vector3(yAxisX - 0.2, tickY, maxZ)
+    // Vertical glowing line
+    const yLineGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(yAxisX, 0.02, maxZ),
+      new THREE.Vector3(yAxisX, yAxisHeight, maxZ)
     ]);
-    const tickLine = new THREE.Line(tickGeo, yLineMat);
-    group.add(tickLine);
+    const yLineMat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.85,
+      linewidth: 2
+    });
+    group.add(new THREE.Line(yLineGeo, yLineMat));
 
-    // Tick Value Label
-    if (showLabels) {
-      const formattedTick = formatDataValue(tickVal);
-      const tickSprite = createAxisTickLabelSprite(formattedTick);
-      tickSprite.position.set(yAxisX - 0.72, tickY, maxZ);
-      group.add(tickSprite);
+    // Y-Axis Ticks & Values
+    const tickCount = 6;
+    const tickStep = maxVal / (tickCount - 1);
+    for (let t = 0; t < tickCount; t++) {
+      const tickVal = t * tickStep;
+      const tickY = Math.max((tickVal / maxVal) * maxHeight, 0.02);
+
+      // Tick Mark
+      const tickGeo = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(yAxisX, tickY, maxZ),
+        new THREE.Vector3(yAxisX - 0.2, tickY, maxZ)
+      ]);
+      const tickLine = new THREE.Line(tickGeo, yLineMat);
+      group.add(tickLine);
+
+      // Tick Value Label
+      if (showLabels) {
+        const formattedTick = formatDataValue(tickVal);
+        const tickSprite = createAxisTickLabelSprite(formattedTick);
+        tickSprite.position.set(yAxisX - 0.72, tickY, maxZ);
+        group.add(tickSprite);
+      }
     }
-  }
 
-  // Rotated Y-Axis Title ("Sales" / Column Name)
-  const yTitle = String(yLabel || 'Sales').trim();
-  const yTitleSprite = createAxisTitleSprite(yTitle, true);
-  yTitleSprite.position.set(yAxisX - 1.5, yAxisHeight / 2, maxZ);
-  group.add(yTitleSprite);
+    // Rotated Y-Axis Title ("Sales" / Column Name)
+    const yTitle = String(yLabel || 'Sales').trim();
+    const yTitleSprite = createAxisTitleSprite(yTitle, true);
+    yTitleSprite.position.set(yAxisX - 1.5, yAxisHeight / 2, maxZ);
+    group.add(yTitleSprite);
+  }
 }
 
 /** 3D Scatter & Bubble Chart */
@@ -1617,54 +1722,82 @@ function build3DPieDonut(group, data, isDonut, wireframe, interactiveList, palet
 /** 3D Line & Ribbon Area Chart */
 function build3DLineArea(group, data, maxVal, maxHeight, isArea, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, accentColor = 0x013e37, showLabels = true, isDark = false) {
   const count = data.length;
-  const spacing = 1.6;
+  const spacing = count <= 6 ? 2.3 : Math.max(14 / count, 1.4);
   const startX = -((count - 1) * spacing) / 2;
   const points = [];
-  const accentHex = typeof accentColor === 'number' ? `#${accentColor.toString(16).padStart(6, '0')}` : accentColor;
+
+  // Use vibrant colors from palette
+  const colorsToUse = (paletteColors && paletteColors.length && paletteColors !== PALETTE_MAP.butter_green)
+    ? paletteColors
+    : CYBER_3D_PALETTE;
 
   data.forEach((d, i) => {
-    const height = Math.max((d.val / maxVal) * maxHeight, 0.5);
-    const pt = new THREE.Vector3(startX + i * spacing, height, 0);
+    const rawRatio = maxVal > 0 ? (d.val / maxVal) : 0.5;
+    const height = Math.max(rawRatio * maxHeight, 0.6);
+    const colorHex = colorsToUse[i % colorsToUse.length];
+    // Positioned at z = 0.4 so it floats prominently in front of the 2D backdrop card (at z = -2.4)
+    const pt = new THREE.Vector3(startX + i * spacing, height, 0.4);
     points.push(pt);
 
-    // Marker sphere
-    const sphereGeo = new THREE.SphereGeometry(0.35, 16, 16);
-    const sphereMat = new THREE.MeshStandardMaterial({
-      color: paletteColors[i % paletteColors.length],
-      metalness: 0.4,
-      roughness: 0.2,
+    // Marker sphere with rich specular shine
+    const sphereGeo = new THREE.SphereGeometry(0.38, 24, 24);
+    const sphereMat = new THREE.MeshPhysicalMaterial({
+      color: colorHex,
+      metalness: 0.15,
+      roughness: 0.15,
+      clearcoat: 0.8,
+      reflectivity: 0.6,
       wireframe: wireframe
     });
     const sphere = new THREE.Mesh(sphereGeo, sphereMat);
     sphere.position.copy(pt);
     sphere.castShadow = true;
-    sphere.userData = { label: d.label, val: d.val };
+    sphere.userData = { label: d.label, val: formatDataValue(d.val) };
     group.add(sphere);
     interactiveList.push(sphere);
 
-    // Tight micro-badge attached directly to marker sphere (depth tested)
+    // Glowing floating pill value badge
     if (showLabels) {
-      const labelSprite = createTightBadgeSprite(d.val, isDark, accentHex);
-      labelSprite.position.set(pt.x, height + 0.38, pt.z);
+      const labelSprite = createFloatingValueBadge(d.val, colorHex);
+      labelSprite.position.set(pt.x, height + 0.68, pt.z);
       group.add(labelSprite);
     }
 
-    // Vertical column support
-    const postGeo = new THREE.CylinderGeometry(0.08, 0.08, height, 8);
-    const postMat = new THREE.MeshBasicMaterial({ color: accentColor, opacity: 0.3, transparent: true });
-    const post = new THREE.Mesh(postGeo, postMat);
-    post.position.set(pt.x, height / 2, 0);
-    group.add(post);
+    // Glowing vertical drop line connecting point to floor
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(pt.x, 0.02, pt.z),
+      new THREE.Vector3(pt.x, height, pt.z)
+    ]);
+    const lineMat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.65,
+      linewidth: 2
+    });
+    group.add(new THREE.Line(lineGeo, lineMat));
+
+    // Floor glow disc under each drop line
+    const puddleGeo = new THREE.CylinderGeometry(0.35, 0.5, 0.02, 16);
+    const puddleMat = new THREE.MeshBasicMaterial({
+      color: colorHex,
+      transparent: true,
+      opacity: 0.32
+    });
+    const puddle = new THREE.Mesh(puddleGeo, puddleMat);
+    puddle.position.set(pt.x, 0.01, pt.z);
+    group.add(puddle);
   });
 
-  // Curve tube
+  // Smooth CatmullRom Curve 3D Tube
   if (points.length >= 2) {
     const curve = new THREE.CatmullRomCurve3(points);
-    const tubeGeo = new THREE.TubeGeometry(curve, 64, 0.2, 12, false);
-    const tubeMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(paletteColors[0] || 0x08ab9c),
-      metalness: 0.5,
-      roughness: 0.25,
+    const tubeGeo = new THREE.TubeGeometry(curve, 80, 0.22, 16, false);
+    const tubeMat = new THREE.MeshPhysicalMaterial({
+      color: colorsToUse[0] || 0x10b981,
+      metalness: 0.2,
+      roughness: 0.18,
+      clearcoat: 0.75,
+      reflectivity: 0.6,
       wireframe: wireframe
     });
     const tube = new THREE.Mesh(tubeGeo, tubeMat);
