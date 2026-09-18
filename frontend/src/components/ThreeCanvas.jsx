@@ -783,32 +783,35 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
 
   let dataPoints = [];
 
-  if (['pie', 'donut'].includes(chartType)) {
-    // For pie/donut, aggregate frequency counts or values by category (like value_counts)
-    const counts = {};
+  let effYCol = yCol || numCols[0] || allCols[0];
+  let effXCol = xCol || catCols[0] || allCols[1] || allCols[0];
+
+  // Auto-swap if x_col is numeric and y_col is categorical
+  if (numCols.includes(effXCol) && !numCols.includes(effYCol)) {
+    const temp = effXCol;
+    effXCol = effYCol;
+    effYCol = temp;
+  }
+
+  const isCategoricalChart = ['bar', 'pie', 'donut', 'lollipop', 'waterfall', 'funnel'].some(t => chartType.includes(t));
+
+  if (isCategoricalChart) {
+    // Aggregate by category (effXCol) matching 2D bar chart behavior exactly
+    const grouped = {};
     allRows.forEach((r) => {
-      const key = String(r[xCol] ?? 'Other');
-      const val = yCol && r[yCol] !== undefined && !isNaN(parseFloat(r[yCol]))
-        ? parseFloat(r[yCol])
+      const key = String(r[effXCol] ?? 'Other');
+      const val = effYCol && r[effYCol] !== undefined && !isNaN(parseFloat(r[effYCol]))
+        ? parseFloat(r[effYCol])
         : 1;
-      counts[key] = (counts[key] || 0) + val;
+      grouped[key] = (grouped[key] || 0) + val;
     });
 
-    dataPoints = Object.entries(counts)
+    dataPoints = Object.entries(grouped)
       .map(([label, val]) => ({ label, val }))
-      .sort((a, b) => b.val - a.val);
+      .sort((a, b) => b.val - a.val)
+      .slice(0, 16);
   } else {
     const rows = allRows.slice(0, 16);
-    let effYCol = yCol || numCols[0] || allCols[0];
-    let effXCol = xCol || catCols[0] || allCols[1] || allCols[0];
-
-    // Auto-swap if x_col is numeric and y_col is categorical
-    if (numCols.includes(effXCol) && !numCols.includes(effYCol)) {
-      const temp = effXCol;
-      effXCol = effYCol;
-      effYCol = temp;
-    }
-
     dataPoints = rows.map((r, i) => {
       const rawVal = parseFloat(r[effYCol]);
       return {
