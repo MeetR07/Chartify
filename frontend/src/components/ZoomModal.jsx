@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, Download, Columns, Box, Image } from 'lucide-react';
 import ThreeCanvas from './ThreeCanvas';
+import { generateClient2DChartSvg } from '../utils/svgChartGenerator';
 
 export default function ZoomModal({
   activeChart,
@@ -145,9 +146,13 @@ export default function ZoomModal({
                 </div>
                 <div className="zoom-modal-pane-content modal-image-wrap">
                   <img
-                    src={activeChart.url}
+                    src={activeChart.url || generateClient2DChartSvg(activeChart, dataset)}
                     alt={activeChart.title || 'Fullscreen Chart'}
                     className="modal-image"
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = generateClient2DChartSvg(activeChart, dataset);
+                    }}
                   />
                 </div>
               </div>
@@ -164,9 +169,13 @@ export default function ZoomModal({
           ) : (
             <div className="zoom-modal-single-pane modal-image-wrap">
               <img
-                src={activeChart.url}
+                src={activeChart.url || generateClient2DChartSvg(activeChart, dataset)}
                 alt={activeChart.title || 'Fullscreen Chart'}
                 className="modal-image"
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = generateClient2DChartSvg(activeChart, dataset);
+                }}
               />
             </div>
           )}

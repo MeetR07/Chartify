@@ -12,6 +12,7 @@ import Footer from './components/Footer';
 import { THEME_STYLES, PALETTES } from './constants/themeOptions';
 import { generateAccurateChartQuery, getDynamicQuickChips } from './utils/dynamicPrompts';
 import { parseCSVClientSide } from './utils/csvParser';
+import { generateClient2DChartSvg } from './utils/svgChartGenerator';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
@@ -253,23 +254,27 @@ export default function App() {
       const yCol = numCols[0] || curData.columns?.[1] || 'Sales';
       const hueCol = catCols.length > 1 ? catCols[1] : null;
 
+      const fallbackTitle = `${cType.toUpperCase()} of ${yCol} by ${xCol}`;
+      const fallbackArgs = {
+        chart_type: cType,
+        x_col: xCol,
+        y_col: yCol,
+        hue_col: hueCol,
+        title: fallbackTitle,
+        style: effectiveStyle,
+        palette: effectivePalette
+      };
+      const svgUrl = generateClient2DChartSvg({ chart_type: cType, title: fallbackTitle, args: fallbackArgs }, curData);
+
       const fallbackChart = {
         id: Date.now(),
-        url: '', // ThreeCanvas renders in interactive 3D WebGL directly
+        url: svgUrl,
         chart_type: cType,
-        title: `${cType.toUpperCase()} of ${yCol} by ${xCol}`,
+        title: fallbackTitle,
         tokens: { prompt: 18, completion: 45, total: 63 },
         query: q,
         result: `Rendered dynamic 3D ${cType} visualization of ${yCol} across ${xCol}`,
-        args: {
-          chart_type: cType,
-          x_col: xCol,
-          y_col: yCol,
-          hue_col: hueCol,
-          title: `${cType.toUpperCase()} of ${yCol} by ${xCol}`,
-          style: effectiveStyle,
-          palette: effectivePalette
-        }
+        args: fallbackArgs
       };
 
       setActiveChart(fallbackChart);
@@ -374,15 +379,18 @@ export default function App() {
       e.preventDefault();
       e.stopPropagation();
     }
-    if (!activeChart || !activeChart.url) return;
+    const downloadUrl = activeChart?.url || (activeChart && dataset ? generateClient2DChartSvg(activeChart, dataset) : '');
+    if (!downloadUrl) return;
     try {
+      const isSvg = downloadUrl.startsWith('data:image/svg+xml');
+      const ext = isSvg ? 'svg' : 'png';
       const tempLink = document.createElement('a');
-      tempLink.href = activeChart.url;
-      tempLink.download = `${activeChart.chart_type || 'chart'}.png`;
+      tempLink.href = downloadUrl;
+      tempLink.download = `${activeChart.chart_type || 'chart'}.${ext}`;
       document.body.appendChild(tempLink);
       tempLink.click();
       document.body.removeChild(tempLink);
-      setToast({ message: 'High-res PNG downloaded successfully!', type: 'success' });
+      setToast({ message: `High-res ${ext.toUpperCase()} downloaded successfully!`, type: 'success' });
     } catch (err) {
       console.error('Download failed:', err);
       setToast({ message: 'Chart download failed', type: 'error' });

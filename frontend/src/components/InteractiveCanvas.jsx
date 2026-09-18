@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BarChart3, Download, Maximize2, TrendingUp, Sparkles, Shuffle } from 'lucide-react';
 import ThreeCanvas from './ThreeCanvas';
+import { generateClient2DChartSvg } from '../utils/svgChartGenerator';
 
 export default function InteractiveCanvas({
   activeChart,
@@ -122,9 +123,13 @@ export default function InteractiveCanvas({
           ) : (
             <div className="active-chart-container">
               <img
-                src={activeChart.url}
+                src={activeChart.url || generateClient2DChartSvg(activeChart, dataset)}
                 alt={activeChart.title || 'Generated AI Chart'}
                 className={`chart-image ${isRestyling ? 'chart-blur' : ''}`}
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = generateClient2DChartSvg(activeChart, dataset);
+                }}
               />
 
               {isRestyling && (
