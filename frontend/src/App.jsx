@@ -215,6 +215,7 @@ export default function App() {
             tokens: data.tokens,
             query: q,
             result: data.result,
+            chart_data: data.chart_data,
             args: {
               ...data.tool_args,
               style: effectiveStyle,
@@ -271,6 +272,7 @@ export default function App() {
           const updatedChart = {
             ...activeChart,
             url: data.chart_url,
+            chart_data: data.chart_data || activeChart.chart_data,
             args: {
               ...activeChart.args,
               ...data.tool_args,

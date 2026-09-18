@@ -63,6 +63,13 @@ MODERN_PALETTES: Dict[str, List[str]] = {
 
 DEFAULT_PALETTE = MODERN_PALETTES["butter_green"]
 
+LAST_CHART_DATA: Dict[str, Any] = {}
+
+def get_last_chart_data() -> Dict[str, Any]:
+    """Returns the exact plotted dataset and metadata from the most recent 2D chart generation."""
+    global LAST_CHART_DATA
+    return dict(LAST_CHART_DATA)
+
 
 def resolve_palette_colors(palette_name: Optional[str], n_colors: int = 8) -> List[str]:
     """Resolves curated HEX color palettes with graceful fallbacks."""
@@ -911,6 +918,64 @@ def generate_chart(
 
         try:
             fig.tight_layout(pad=1.4)
+        except Exception:
+            pass
+
+        # Capture exact plotted data so 3D chart elements match 2D chart data 100%
+        try:
+            chart_meta: Dict[str, Any] = {
+                "chart_type": chart_t,
+                "x_col": x_col,
+                "y_col": effective_y,
+                "title": title
+            }
+            if chart_t in ["scatter", "bubble"]:
+                sample_pts = plot_df[[x_col, effective_y]].dropna()
+                if len(sample_pts) > 150:
+                    sample_pts = sample_pts.sample(n=150, random_state=42)
+                chart_meta["points"] = [
+                    {"x": float(r[x_col]), "y": float(r[effective_y])}
+                    for _, r in sample_pts.iterrows()
+                ]
+                chart_meta["min_x"] = float(plot_df[x_col].min())
+                chart_meta["max_x"] = float(plot_df[x_col].max())
+                chart_meta["min_y"] = float(plot_df[effective_y].min())
+                chart_meta["max_y"] = float(plot_df[effective_y].max())
+            elif chart_t in ["bar", "donut", "doughnut", "pie", "funnel", "treemap", "lollipop", "waterfall"]:
+                if 'categories' in locals() and 'values' in locals():
+                    chart_meta["data_points"] = [
+                        {"label": str(c), "val": float(v)} for c, v in zip(categories, values)
+                    ]
+                elif 'sizes' in locals() and 'labels' in locals():
+                    chart_meta["data_points"] = [
+                        {"label": str(l).split('\n')[0], "val": float(s)} for l, s in zip(labels, sizes)
+                    ]
+                elif 'pie_data' in locals():
+                    chart_meta["data_points"] = [
+                        {"label": str(k), "val": float(v)} for k, v in pie_data.items()
+                    ]
+                elif effective_y and effective_y in plot_df.columns and x_col and x_col in plot_df.columns:
+                    grouped_p = plot_df.groupby(x_col, as_index=False)[effective_y].sum().head(16)
+                    chart_meta["data_points"] = [
+                        {"label": str(r[x_col]), "val": float(r[effective_y])} for _, r in grouped_p.iterrows()
+                    ]
+            elif chart_t in ["line", "trend", "area"]:
+                if 'x_vals' in locals() and 'y_vals' in locals():
+                    chart_meta["data_points"] = [
+                        {"label": str(x), "val": float(y)} for x, y in zip(list(x_vals)[:40], list(y_vals)[:40])
+                    ]
+            elif chart_t in ["histogram", "hist"]:
+                vals = plot_df[x_col].dropna().astype(float).values
+                counts, bin_edges = np.histogram(vals, bins=8)
+                chart_meta["bins"] = [
+                    {"min": float(bin_edges[i]), "max": float(bin_edges[i+1]), "count": int(counts[i])}
+                    for i in range(len(counts))
+                ]
+                chart_meta["min_x"] = float(vals.min())
+                chart_meta["max_x"] = float(vals.max())
+            
+            global LAST_CHART_DATA
+            LAST_CHART_DATA = chart_meta
         except Exception:
             pass
 

@@ -254,6 +254,7 @@ async def generate_chart_endpoint(req: QueryRequest):
                 "tool_called": True,
                 "chart_type": args.get("chart_type", "chart"),
                 "tool_args": args,
+                "chart_data": charts.get_last_chart_data(),
                 "result": "Rendered in-memory",
                 "chart_filename": f"{args.get('chart_type', 'chart')}.png",
                 "chart_url": data_url,
@@ -340,6 +341,7 @@ async def generate_chart_endpoint(req: QueryRequest):
             "tool_called": True,
             "chart_type": args.get("chart_type", "chart"),
             "tool_args": args,
+            "chart_data": charts.get_last_chart_data(),
             "result": "Rendered in-memory",
             "chart_filename": f"{args.get('chart_type', 'chart')}.png",
             "chart_url": data_url,
@@ -372,6 +374,7 @@ async def apply_style_endpoint(req: Dict[str, Any]):
             "chart_type": args.get("chart_type", "chart"),
             "chart_url": data_url,
             "tool_args": args,
+            "chart_data": charts.get_last_chart_data(),
             "result": "Restyled in-memory"
         }
     except HTTPException:
