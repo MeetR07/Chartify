@@ -174,9 +174,255 @@ function createTightBadgeSprite(val, isDark = false, accentHex = '#08ab9c') {
   return sprite;
 }
 
-export function resolveBackgroundTheme(styleKey = 'whitegrid', paletteKey = 'butter_green') {
+/**
+ * Creates floating pill badge with glowing border and downward pointer tip directly above columns.
+ */
+function createFloatingValueBadge(val, colorHex = '#38bdf8') {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const scale = 3;
+  const w = 110;
+  const h = 56;
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  ctx.scale(scale, scale);
+
+  const formattedVal = formatDataValue(val);
+
+  const pad = 4;
+  const bw = w - pad * 2;
+  const bh = 34;
+  const r = 8;
+  const tipW = 8;
+  const tipH = 8;
+  const centerX = w / 2;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(pad + r, pad);
+  ctx.lineTo(pad + bw - r, pad);
+  ctx.arcTo(pad + bw, pad, pad + bw, pad + r, r);
+  ctx.lineTo(pad + bw, pad + bh - r);
+  ctx.arcTo(pad + bw, pad + bh, pad + bw - r, pad + bh, r);
+
+  // Downward pointer tip pointing towards the top face of the 3D bar
+  ctx.lineTo(centerX + tipW, pad + bh);
+  ctx.lineTo(centerX, pad + bh + tipH);
+  ctx.lineTo(centerX - tipW, pad + bh);
+
+  ctx.lineTo(pad + r, pad + bh);
+  ctx.arcTo(pad, pad + bh, pad, pad + bh - r, r);
+  ctx.lineTo(pad, pad + r);
+  ctx.arcTo(pad, pad, pad + r, pad, r);
+  ctx.closePath();
+
+  // Dark glassy translucent background
+  ctx.fillStyle = 'rgba(7, 13, 30, 0.94)';
+  ctx.fill();
+
+  // Neon glowing stroke matching column color
+  ctx.lineWidth = 2.4;
+  ctx.strokeStyle = colorHex;
+  ctx.shadowColor = colorHex;
+  ctx.shadowBlur = 8;
+  ctx.stroke();
+
+  // Crisp bold white value text
+  ctx.shadowBlur = 0;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(formattedVal, centerX, pad + bh / 2 + 0.5);
+  ctx.restore();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+
+  const spriteMat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false
+  });
+
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(1.4, 0.71, 1);
+  return sprite;
+}
+
+/**
+ * Creates category text label sprite positioned beneath each 3D column.
+ */
+function createCategoryLabelSprite(label, isDark = true) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const scale = 3;
+  const w = 120;
+  const h = 40;
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  ctx.scale(scale, scale);
+
+  const cleanLabel = String(label ?? '');
+  const displayLabel = cleanLabel.length > 12 ? cleanLabel.slice(0, 10) + '…' : cleanLabel;
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '600 16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillStyle = isDark ? '#cbd5e1' : '#334155';
+  ctx.fillText(displayLabel, w / 2, h / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+
+  const spriteMat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false
+  });
+
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(1.4, 0.46, 1);
+  return sprite;
+}
+
+/**
+ * Creates Y-axis tick label sprite.
+ */
+function createAxisTickLabelSprite(text) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const scale = 3;
+  const w = 80;
+  const h = 32;
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  ctx.scale(scale, scale);
+
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.font = '600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillStyle = '#93c5fd';
+  ctx.fillText(text, w - 8, h / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+
+  const spriteMat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(0.95, 0.38, 1);
+  return sprite;
+}
+
+/**
+ * Creates rotated or horizontal axis title sprite (e.g., "Sales", "Month").
+ */
+function createAxisTitleSprite(text, isVertical = false) {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const scale = 3;
+  const w = isVertical ? 44 : 180;
+  const h = isVertical ? 180 : 44;
+  canvas.width = w * scale;
+  canvas.height = h * scale;
+  ctx.scale(scale, scale);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.fillStyle = '#60a5fa';
+
+  if (isVertical) {
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  } else {
+    ctx.fillText(text, w / 2, h / 2);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.needsUpdate = true;
+
+  const spriteMat = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(w / 70, h / 70, 1);
+  return sprite;
+}
+
+/**
+ * Creates chamfered / beveled 3D column geometry with rounded vertical corners and beveled top edges.
+ */
+function createBeveledBarGeometry(width, height, depth, bevel = 0.05) {
+  const shape = new THREE.Shape();
+  const hw = Math.max(0.1, (width / 2) - bevel);
+  const hd = Math.max(0.1, (depth / 2) - bevel);
+  const r = Math.min(0.08, hw * 0.4, hd * 0.4);
+
+  shape.moveTo(-hw + r, -hd);
+  shape.lineTo(hw - r, -hd);
+  shape.quadraticCurveTo(hw, -hd, hw, -hd + r);
+  shape.lineTo(hw, hd - r);
+  shape.quadraticCurveTo(hw, hd, hw - r, hd);
+  shape.lineTo(-hw + r, hd);
+  shape.quadraticCurveTo(-hw, hd, -hw, hd - r);
+  shape.lineTo(-hw, -hd + r);
+  shape.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+
+  const actualHeight = Math.max(height, 0.4);
+  const extrudeDepth = Math.max(actualHeight - bevel * 2, 0.05);
+
+  const extrudeSettings = {
+    steps: 1,
+    depth: extrudeDepth,
+    bevelEnabled: true,
+    bevelThickness: bevel,
+    bevelSize: bevel,
+    bevelSegments: 4
+  };
+
+  const geom = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+  geom.rotateX(-Math.PI / 2);
+  geom.computeBoundingBox();
+  const minY = geom.boundingBox.min.y;
+  geom.translate(0, -minY, 0);
+  return geom;
+}
+
+export function resolveBackgroundTheme(styleKey = 'whitegrid', paletteKey = 'butter_green', displayMode = 'mesh') {
   const s = String(styleKey || '').toLowerCase().replace(/-/g, '_').trim();
   const p = String(paletteKey || '').toLowerCase().replace(/-/g, '_').trim();
+
+  // If viewing 3D mesh engine, default to the immersive cyber dark stage from the design reference
+  if (displayMode === 'mesh') {
+    return {
+      cssBackground: 'radial-gradient(circle at 50% 35%, #0c1838 0%, #050b1a 100%)',
+      gridColor: 0x1d4ed8,
+      gridOpacity: 0.38,
+      accentColor: 0x38bdf8,
+      lightIntensity: 1.4,
+      ambientIntensity: 0.9,
+      floorShadowOpacity: 0.38,
+      isDark: true
+    };
+  }
 
   const isDarkStyle = s.includes('dark');
   const isDarkPalette = ['inferno', 'magma', 'cyberpunk', 'rocket', 'mako', 'icefire'].includes(p);
@@ -399,8 +645,8 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
   const activePaletteKey = selectedPalette || activeChart?.args?.palette || 'butter_green';
   const activeStyleKey = selectedStyle || activeChart?.args?.style || 'whitegrid';
   const bgTheme = useMemo(
-    () => resolveBackgroundTheme(activeStyleKey, activePaletteKey),
-    [activeStyleKey, activePaletteKey]
+    () => resolveBackgroundTheme(activeStyleKey, activePaletteKey, displayMode),
+    [activeStyleKey, activePaletteKey, displayMode]
   );
   const chartArgsKey = JSON.stringify(activeChart?.args || {});
 
@@ -418,12 +664,12 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     const width = container.clientWidth || 600;
     const height = container.clientHeight || 450;
 
-    // 2. Camera (Centered straight in front of screen)
+    // 2. Camera (Slight isometric angle for 3D mesh view matching reference design)
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
     if (displayMode === 'card') {
       camera.position.set(0, 5.7, 18.5);
     } else {
-      camera.position.set(0, 8.5, 21.0);
+      camera.position.set(2.8, 8.2, 17.5);
     }
     cameraRef.current = camera;
 
@@ -456,26 +702,31 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     if (displayMode === 'card') {
       controls.target.set(0, 5.7, 0);
     } else {
-      controls.target.set(0, 3.2, 0);
+      controls.target.set(0, 3.8, 0);
     }
     controls.update();
     controlsRef.current = controls;
 
     // 5. Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, bgTheme.ambientIntensity || 0.85);
+    const ambientLight = new THREE.AmbientLight(0xffffff, bgTheme.ambientIntensity || 0.9);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, bgTheme.lightIntensity || 1.2);
-    dirLight.position.set(15, 25, 15);
+    const dirLight = new THREE.DirectionalLight(0xffffff, bgTheme.lightIntensity || 1.3);
+    dirLight.position.set(12, 24, 14);
     dirLight.castShadow = true;
     dirLight.shadow.mapSize.width = 1024;
     dirLight.shadow.mapSize.height = 1024;
     scene.add(dirLight);
 
     const rimLightColor = bgTheme.isDark ? 0x60a5fa : 0xffefb3;
-    const rimLight = new THREE.DirectionalLight(rimLightColor, bgTheme.isDark ? 0.8 : 0.6);
-    rimLight.position.set(-15, 10, -15);
+    const rimLight = new THREE.DirectionalLight(rimLightColor, bgTheme.isDark ? 0.9 : 0.6);
+    rimLight.position.set(-14, 12, -14);
     scene.add(rimLight);
+
+    // Front specular fill light to bring out beveled edges and top chamfers
+    const frontLight = new THREE.DirectionalLight(0xffffff, 0.75);
+    frontLight.position.set(2, 12, 18);
+    scene.add(frontLight);
 
     // 6. Floor Grid with Dynamic Theme Colors
     const gridHelper = new THREE.GridHelper(24, 24, bgTheme.gridColor, bgTheme.gridColor);
@@ -555,6 +806,12 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
           if (obj.userData?.isCard) {
             const s = THREE.MathUtils.lerp(0.01, 1, startScaling);
             obj.scale.set(s, s, s);
+          } else if (obj.userData?.isBeveledBar) {
+            const s = THREE.MathUtils.lerp(0.01, 1, startScaling);
+            obj.scale.y = s;
+            if (obj.userData.badge) {
+              obj.userData.badge.position.y = (obj.userData.barHeight * s) + 0.72;
+            }
           } else if (obj.userData?.origScaleY) {
             obj.scale.y = THREE.MathUtils.lerp(0.01, obj.userData.origScaleY, startScaling);
             obj.position.y = (obj.scale.y * (obj.userData.baseHeight || 1)) / 2;
@@ -632,8 +889,8 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
         cameraRef.current.position.set(0, 5.7, 18.5);
         controlsRef.current.target.set(0, 5.7, 0);
       } else {
-        cameraRef.current.position.set(0, 8.5, 21.0);
-        controlsRef.current.target.set(0, 3.2, 0);
+        cameraRef.current.position.set(2.8, 8.2, 17.5);
+        controlsRef.current.target.set(0, 3.8, 0);
       }
       controlsRef.current.update();
     }
@@ -846,7 +1103,7 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
     build3DHeatmap(chartGroup, dataPoints, wireframe, interactiveList, paletteColors, showLabels, isDark);
   } else {
     // Bar, lollipop, waterfall fallback to 3D Columns
-    build3DBar(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark);
+    build3DBar(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol);
   }
 }
 
@@ -1005,57 +1262,200 @@ function build3DCard(group, activeChart, wireframe, interactiveList, accentColor
   return cardGroup;
 }
 
-/** 3D Bar & Column Chart */
-function build3DBar(group, data, maxVal, maxHeight, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, accentColor = 0x013e37, showLabels = true, isDark = false) {
+/** Reference image palette for cyber 3D bars */
+const CYBER_3D_PALETTE = [
+  '#7C3AED', // Electric Violet / Purple (May - 31.0K)
+  '#EC4899', // Hot Magenta / Pink (Apr - 27.0K)
+  '#10B981', // Luminous Mint / Emerald (Feb - 22.0K)
+  '#F97316', // Warm Tangerine / Orange (Mar - 18.0K)
+  '#0EA5E9', // Electric Cyan / Sky Blue (Jan - 15.0K)
+  '#8B5CF6', // Soft Violet
+  '#F43F5E', // Rose
+  '#06B6D4', // Cyan
+  '#EAB308', // Amber
+  '#14B8A6'  // Teal
+];
+
+/** 3D Bar & Column Chart (Faithful replication of cyber beveled 3D columns with glowing badges & neon perimeter) */
+function build3DBar(
+  group,
+  data,
+  maxVal,
+  maxHeight,
+  wireframe,
+  interactiveList,
+  paletteColors = PALETTE_MAP.butter_green,
+  accentColor = 0x013e37,
+  showLabels = true,
+  isDark = true,
+  xLabel = 'Month',
+  yLabel = 'Sales'
+) {
   const count = data.length;
-  const spacing = 1.6;
+  // Calculate dynamic spacing and width
+  const spacing = count <= 5 ? 2.3 : Math.max(14 / count, 1.4);
+  const barWidth = count <= 5 ? 1.45 : Math.min(spacing * 0.65, 1.4);
+  const barDepth = barWidth;
   const startX = -((count - 1) * spacing) / 2;
-  const accentHex = typeof accentColor === 'number' ? `#${accentColor.toString(16).padStart(6, '0')}` : accentColor;
 
+  // Use the reference cyber palette if default palette is active or if dark
+  const isCustomPalette = paletteColors && paletteColors.length && paletteColors !== PALETTE_MAP.butter_green && paletteColors !== PALETTE_MAP.custom;
+  const colorsToUse = isCustomPalette ? paletteColors : CYBER_3D_PALETTE;
+
+  // Floor neon perimeter boundaries
+  const padX = barWidth * 0.85;
+  const padZ = barDepth * 0.95;
+  const minX = startX - padX;
+  const maxX = (startX + (count - 1) * spacing) + padX;
+  const minZ = -padZ;
+  const maxZ = padZ + 0.35;
+
+  // 1. Glowing Neon Perimeter Line on Floor
+  const framePoints = [
+    new THREE.Vector3(minX, 0.02, minZ),
+    new THREE.Vector3(maxX, 0.02, minZ),
+    new THREE.Vector3(maxX, 0.02, maxZ),
+    new THREE.Vector3(minX, 0.02, maxZ),
+    new THREE.Vector3(minX, 0.02, minZ)
+  ];
+  const frameGeo = new THREE.BufferGeometry().setFromPoints(framePoints);
+  const frameMat = new THREE.LineBasicMaterial({
+    color: 0x3b82f6,
+    transparent: true,
+    opacity: 0.9,
+    linewidth: 2
+  });
+  group.add(new THREE.Line(frameGeo, frameMat));
+
+  // Outer subtle neon bloom line
+  const glowPoints = [
+    new THREE.Vector3(minX - 0.05, 0.015, minZ - 0.05),
+    new THREE.Vector3(maxX + 0.05, 0.015, minZ - 0.05),
+    new THREE.Vector3(maxX + 0.05, 0.015, maxZ + 0.05),
+    new THREE.Vector3(minX - 0.05, 0.015, maxZ + 0.05),
+    new THREE.Vector3(minX - 0.05, 0.015, minZ - 0.05)
+  ];
+  const glowGeo = new THREE.BufferGeometry().setFromPoints(glowPoints);
+  const glowMat = new THREE.LineBasicMaterial({
+    color: 0x60a5fa,
+    transparent: true,
+    opacity: 0.4,
+    linewidth: 3
+  });
+  group.add(new THREE.Line(glowGeo, glowMat));
+
+  // 2. Render each Beveled Column & Floating Badge
   data.forEach((d, i) => {
-    const height = Math.max((d.val / maxVal) * maxHeight, 0.4);
-    const colorHex = paletteColors[i % paletteColors.length];
+    const rawRatio = maxVal > 0 ? (d.val / maxVal) : 0.5;
+    const height = Math.max(rawRatio * maxHeight, 0.5);
+    const colorHex = colorsToUse[i % colorsToUse.length];
+    const barX = startX + i * spacing;
 
-    const geom = new THREE.BoxGeometry(1.0, 1, 1.0);
-    const mat = new THREE.MeshStandardMaterial({
+    // Beveled Column Geometry with smooth chamfered edges
+    const geom = createBeveledBarGeometry(barWidth, height, barDepth, 0.06);
+    const mat = new THREE.MeshPhysicalMaterial({
       color: colorHex,
-      metalness: 0.25,
-      roughness: 0.35,
+      metalness: 0.12,
+      roughness: 0.18,
+      clearcoat: 0.7,
+      clearcoatRoughness: 0.12,
+      reflectivity: 0.6,
       wireframe: wireframe
     });
 
     const mesh = new THREE.Mesh(geom, mat);
-    mesh.position.set(startX + i * spacing, height / 2, 0);
-    mesh.scale.set(1, height, 1);
+    mesh.position.set(barX, 0, 0);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
 
-    // Glued Flat Surface Label (2D decal on top of the 3D bar)
-    let labelMesh = null;
+    // Floating Neon Value Badge
+    let badge = null;
     if (showLabels) {
-      labelMesh = createSurfaceLabelMesh(d.val, d.label, 0.92, 0.92, isDark, accentHex);
-      labelMesh.position.set(startX + i * spacing, height + 0.015, 0);
-      group.add(labelMesh);
+      badge = createFloatingValueBadge(d.val, colorHex);
+      badge.position.set(barX, height + 0.72, 0);
+      group.add(badge);
     }
+
+    // Category Label directly below column
+    const catSprite = createCategoryLabelSprite(d.label, true);
+    catSprite.position.set(barX, -0.42, maxZ + 0.22);
+    group.add(catSprite);
+
+    // Subtle Ground Glow Puddle under each column
+    const puddleGeo = new THREE.CylinderGeometry(barWidth * 0.65, barWidth * 0.8, 0.02, 24);
+    const puddleMat = new THREE.MeshBasicMaterial({
+      color: colorHex,
+      transparent: true,
+      opacity: 0.28
+    });
+    const puddle = new THREE.Mesh(puddleGeo, puddleMat);
+    puddle.position.set(barX, 0.01, 0);
+    group.add(puddle);
 
     mesh.userData = {
       label: d.label,
-      val: d.val,
-      origScaleY: height,
-      baseHeight: 1,
-      labelMesh: labelMesh
+      val: formatDataValue(d.val),
+      isBeveledBar: true,
+      barHeight: height,
+      badge: badge
     };
 
     group.add(mesh);
     interactiveList.push(mesh);
-
-    // Base marker
-    const baseGeo = new THREE.CylinderGeometry(0.65, 0.65, 0.08, 16);
-    const baseMat = new THREE.MeshBasicMaterial({ color: accentColor, opacity: 0.3, transparent: true });
-    const base = new THREE.Mesh(baseGeo, baseMat);
-    base.position.set(startX + i * spacing, 0.04, 0);
-    group.add(base);
   });
+
+  // 3. X-Axis Title Centered at Bottom
+  const xTitle = String(xLabel || 'Month').trim();
+  const xTitleSprite = createAxisTitleSprite(xTitle, false);
+  xTitleSprite.position.set((minX + maxX) / 2, -1.05, maxZ + 0.75);
+  group.add(xTitleSprite);
+
+  // 4. Vertical Y-Axis (Line, Ticks, Labels, Title)
+  const yAxisX = minX - 0.65;
+  const yAxisHeight = maxHeight * 1.06;
+
+  // Vertical glowing line
+  const yLineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(yAxisX, 0.02, maxZ),
+    new THREE.Vector3(yAxisX, yAxisHeight, maxZ)
+  ]);
+  const yLineMat = new THREE.LineBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.85,
+    linewidth: 2
+  });
+  group.add(new THREE.Line(yLineGeo, yLineMat));
+
+  // Y-Axis Ticks & Values
+  const tickCount = 6;
+  const tickStep = maxVal / (tickCount - 1);
+  for (let t = 0; t < tickCount; t++) {
+    const tickVal = t * tickStep;
+    const tickY = Math.max((tickVal / maxVal) * maxHeight, 0.02);
+
+    // Tick Mark
+    const tickGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(yAxisX, tickY, maxZ),
+      new THREE.Vector3(yAxisX - 0.2, tickY, maxZ)
+    ]);
+    const tickLine = new THREE.Line(tickGeo, yLineMat);
+    group.add(tickLine);
+
+    // Tick Value Label
+    if (showLabels) {
+      const formattedTick = formatDataValue(tickVal);
+      const tickSprite = createAxisTickLabelSprite(formattedTick);
+      tickSprite.position.set(yAxisX - 0.72, tickY, maxZ);
+      group.add(tickSprite);
+    }
+  }
+
+  // Rotated Y-Axis Title ("Sales" / Column Name)
+  const yTitle = String(yLabel || 'Sales').trim();
+  const yTitleSprite = createAxisTitleSprite(yTitle, true);
+  yTitleSprite.position.set(yAxisX - 1.5, yAxisHeight / 2, maxZ);
+  group.add(yTitleSprite);
 }
 
 /** 3D Scatter & Bubble Chart */
