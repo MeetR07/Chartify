@@ -1357,16 +1357,6 @@ function ThreeCanvasInner({ activeChart, dataset, selectedPalette, selectedStyle
           <Layers size={13} />
           <span>3D CARD</span>
         </button>
-
-        <button
-          type="button"
-          className={`three-btn ${wireframe ? 'active' : ''}`}
-          onClick={() => setWireframe(!wireframe)}
-          title="Toggle Cyber Wireframe"
-        >
-          <Box size={13} />
-          <span>WIREFRAME</span>
-        </button>
       </div>
 
 
