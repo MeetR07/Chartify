@@ -37,7 +37,8 @@ from agent import (
     heuristic_chart_extractor,
     chart_chain,
     ai_chain,
-    execute_chart_tool
+    execute_chart_tool,
+    summarize_chart_with_llm
 )
 
 # Export list
@@ -50,26 +51,63 @@ __all__ = [
     "chart_chain",
     "ai_chain",
     "execute_chart_tool",
+    "summarize_chart_with_llm",
+    "process_query",
     "start_assistant"
 ]
 
 
 # ==============================================================================
-# 3. INTERACTIVE CLI ASSISTANT
+# 3. INTERACTIVE CLI ASSISTANT & LLM CHART SUMMARIZER
 # ==============================================================================
 
+def process_query(user_query: str):
+    """Generates chart from user query, feeds it to the LLM, and prints executive summary in terminal."""
+    print(f"\n[Query] '{user_query}'")
+    output = chart_chain.invoke({
+        "columns": list(df.columns),
+        "sample_data": df.head(2).to_dict(orient="records"),
+        "user_query": user_query
+    })
+
+    tokens = output.get("tokens", {})
+    print(f"Tokens Used : Total = {tokens.get('total', 0)} (Input: {tokens.get('input', 0)}, Output: {tokens.get('output', 0)})")
+
+    if output.get("tool_called"):
+        print(f"Tool Chosen : generate_chart")
+        print(f"Parameters  : {output.get('tool_args')}")
+        print(f"Result      : {output.get('result')}")
+
+        # Feed the generated chart directly to the LLM for analytical summary
+        print("\n" + "=" * 65)
+        print("🤖 FEEDING GENERATED CHART TO LLM FOR EXECUTIVE SUMMARY...")
+        print("=" * 65)
+        summary_result = summarize_chart_with_llm(output, user_query=user_query, df=df)
+        print(f"\n[AI Visual & Data Analysis — Engine: {summary_result.get('model', 'AI')}]")
+        print("-" * 65)
+        print(summary_result.get("summary"))
+        print("=" * 65 + "\n")
+    else:
+        print(f"\nAI: {output.get('ai_response')}")
+
+
 def start_assistant():
-    print("\n" + "=" * 60)
-    print("AI Data Visualization Assistant Ready (LCEL Runnable Chain)!")
+    print("\n" + "=" * 65)
+    print("AI Data Visualization & LLM Summarizer Assistant Ready!")
     print(f"Dataset Columns: {list(df.columns)}")
     print("Examples:")
-    print("   - 'Generate a treemap of Sales by Region'")
+    print("   - 'Generate a donut chart of Sales across Month'")
+    print("   - 'Create a treemap of Sales by Region'")
     print("   - 'Create a waterfall chart of Monthly Profit'")
     print("   - Type 'exit' to quit")
-    print("=" * 60)
+    print("=" * 65)
 
     while True:
-        user_query = input("\nEnter your chart request: ").strip()
+        try:
+            user_query = input("\nEnter your chart request: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nExiting assistant. Goodbye!")
+            break
 
         if not user_query:
             continue
@@ -77,22 +115,12 @@ def start_assistant():
             print("Exiting assistant. Goodbye!")
             break
 
-        output = chart_chain.invoke({
-            "columns": list(df.columns),
-            "sample_data": df.head(2).to_dict(orient="records"),
-            "user_query": user_query
-        })
-
-        tokens = output.get("tokens", {})
-        print(f"\nTokens Used: Total = {tokens.get('total', 0)} (Input: {tokens.get('input', 0)}, Output: {tokens.get('output', 0)})")
-
-        if output.get("tool_called"):
-            print(f"Tool Chosen : generate_chart")
-            print(f"Parameters  : {output.get('tool_args')}")
-            print(f"Result      : {output.get('result')}")
-        else:
-            print(f"\nAI: {output.get('ai_response')}")
+        process_query(user_query)
 
 
 if __name__ == "__main__":
-    start_assistant()
+    if len(sys.argv) > 1:
+        cli_query = " ".join(sys.argv[1:])
+        process_query(cli_query)
+    else:
+        start_assistant()

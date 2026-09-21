@@ -2050,6 +2050,399 @@ body::after {
   z-index: 10;
 }
 
+/* ==========================================================================
+   💭 Cute Robot AI Summary Thought Bubble & Floating Insights Card
+   ========================================================================== */
+.robot-thought-bubble-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  pointer-events: auto;
+  will-change: transform;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: -24px;
+}
+
+/* Authentic 💭 Cloud Thought Bubble */
+.robot-thought-cloud-btn {
+  position: relative;
+  width: 210px;
+  height: 118px;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  cursor: pointer;
+  animation: bubbleFloat 3.2s ease-in-out infinite;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.robot-thought-cloud-btn:hover {
+  transform: translateY(-5px) scale(1.06);
+}
+
+.thought-cloud-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 8px 24px rgba(8, 171, 156, 0.32)) drop-shadow(0 2px 6px rgba(1, 62, 55, 0.15));
+  transition: filter 0.25s ease;
+}
+
+.robot-thought-bubble-container.dark .thought-cloud-svg {
+  filter: drop-shadow(0 8px 26px rgba(56, 189, 248, 0.45)) drop-shadow(0 0 12px rgba(56, 189, 248, 0.2));
+}
+
+.thought-cloud-path,
+.thought-cloud-tail-c1,
+.thought-cloud-tail-c2 {
+  fill: rgba(255, 253, 240, 0.97);
+  stroke: #08ab9c;
+  stroke-width: 2.8px;
+  stroke-linejoin: round;
+  transition: all 0.25s ease;
+}
+
+.robot-thought-bubble-container.dark .thought-cloud-path,
+.robot-thought-bubble-container.dark .thought-cloud-tail-c1,
+.robot-thought-bubble-container.dark .thought-cloud-tail-c2 {
+  fill: rgba(15, 23, 42, 0.96);
+  stroke: #38bdf8;
+}
+
+.robot-thought-cloud-btn:hover .thought-cloud-path,
+.robot-thought-cloud-btn:hover .thought-cloud-tail-c1,
+.robot-thought-cloud-btn:hover .thought-cloud-tail-c2 {
+  stroke: #f47a34;
+  fill: #ffffff;
+}
+
+.robot-thought-bubble-container.dark .robot-thought-cloud-btn:hover .thought-cloud-path,
+.robot-thought-bubble-container.dark .robot-thought-cloud-btn:hover .thought-cloud-tail-c1,
+.robot-thought-bubble-container.dark .robot-thought-cloud-btn:hover .thought-cloud-tail-c2 {
+  stroke: #f472b6;
+  fill: #1e293b;
+}
+
+/* Text Positioned Exactly Inside the Center of the Thought Cloud Body */
+.thought-cloud-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  padding-top: 14px;
+  padding-bottom: 24px;
+  padding-left: 12px;
+  padding-right: 6px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+  font-family: var(--font-heading);
+  color: #013e37;
+  user-select: none;
+}
+
+.robot-thought-bubble-container.dark .thought-cloud-content {
+  color: #f8fafc;
+}
+
+.cloud-text-normal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  line-height: 1.25;
+}
+
+.cloud-line-1 {
+  font-size: 0.84rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  margin: 0;
+}
+
+.cloud-line-2 {
+  font-size: 0.86rem;
+  font-weight: 900;
+  color: #08ab9c;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+}
+
+.robot-thought-bubble-container.dark .cloud-line-2 {
+  color: #38bdf8;
+}
+
+.cloud-text-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: #fc6eae;
+}
+
+.cloud-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fc6eae;
+  animation: pulseDot 0.8s ease-in-out infinite alternate;
+}
+
+.cloud-text-error {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #f43f5e;
+}
+
+/* Thought Bubble Tail Circles (💭 effect for summary card) */
+.thought-bubbles-tail {
+  position: absolute;
+  bottom: -18px;
+  left: 22%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.tail-dot {
+  border-radius: 50%;
+  background: rgba(255, 253, 240, 0.95);
+  border: 1.5px solid #08ab9c;
+}
+
+.robot-thought-bubble-container.dark .tail-dot {
+  background: rgba(15, 23, 42, 0.94);
+  border-color: #38bdf8;
+}
+
+.tail-dot-1 {
+  width: 9px;
+  height: 9px;
+}
+
+.tail-dot-2 {
+  width: 5px;
+  height: 5px;
+}
+
+/* Expanded AI Summary Card */
+.robot-summary-card {
+  position: relative;
+  width: 350px;
+  max-width: 90vw;
+  background: rgba(255, 253, 240, 0.97);
+  border: 2px solid #08ab9c;
+  border-radius: 20px;
+  box-shadow: 0 12px 36px rgba(1, 62, 55, 0.28), 0 4px 12px rgba(8, 171, 156, 0.2);
+  backdrop-filter: blur(14px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: cardPopIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  color: #013e37;
+  max-height: 235px;
+}
+
+.robot-thought-bubble-container.dark .robot-summary-card {
+  background: rgba(15, 23, 42, 0.96);
+  border-color: #38bdf8;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.6), 0 0 20px rgba(56, 189, 248, 0.25);
+  color: #f1f5f9;
+}
+
+.summary-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1.5px solid rgba(8, 171, 156, 0.2);
+  background: rgba(8, 171, 156, 0.08);
+}
+
+.robot-thought-bubble-container.dark .summary-card-header {
+  border-bottom-color: rgba(56, 189, 248, 0.2);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.summary-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-heading);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.summary-model-pill {
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: #08ab9c;
+  color: #ffffff;
+  letter-spacing: 0.02em;
+}
+
+.robot-thought-bubble-container.dark .summary-model-pill {
+  background: #38bdf8;
+  color: #0f172a;
+}
+
+.summary-close-btn {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  opacity: 0.7;
+  transition: all 0.15s ease;
+}
+
+.summary-close-btn:hover {
+  opacity: 1;
+  background: rgba(244, 122, 52, 0.2);
+  color: #f47a34;
+}
+
+.summary-card-body {
+  padding: 10px 14px;
+  max-height: 145px;
+  overflow-y: auto;
+  font-size: 0.76rem;
+  line-height: 1.48;
+}
+
+.summary-card-body::-webkit-scrollbar {
+  width: 5px;
+}
+.summary-card-body::-webkit-scrollbar-thumb {
+  background: rgba(8, 171, 156, 0.4);
+  border-radius: 4px;
+}
+
+.summary-paragraph {
+  margin-bottom: 10px;
+}
+
+.summary-section-heading {
+  font-family: var(--font-heading);
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: #08ab9c;
+  margin: 6px 0 3px 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.robot-thought-bubble-container.dark .summary-section-heading {
+  color: #38bdf8;
+}
+
+.summary-bullet {
+  margin: 2px 0 2px 8px;
+  opacity: 0.92;
+}
+
+.summary-line {
+  margin: 2px 0;
+  opacity: 0.88;
+}
+
+.summary-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-top: 1.5px solid rgba(8, 171, 156, 0.15);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.summary-reanalyze-btn {
+  background: #08ab9c;
+  color: #ffffff;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.summary-reanalyze-btn:hover {
+  background: #068a7e;
+  transform: translateY(-1px);
+}
+
+.summary-minimize-btn {
+  background: transparent;
+  border: 1px solid rgba(1, 62, 55, 0.25);
+  color: inherit;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.summary-minimize-btn:hover {
+  background: rgba(1, 62, 55, 0.08);
+}
+
+@keyframes bubbleFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes sparkleTwinkle {
+  0% { transform: scale(0.8) rotate(0deg); opacity: 0.6; }
+  100% { transform: scale(1.25) rotate(20deg); opacity: 1; }
+}
+
+@keyframes pulseDot {
+  0% { transform: scale(0.7); opacity: 0.5; }
+  100% { transform: scale(1.3); opacity: 1; }
+}
+
+@keyframes cardPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.85) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 .download-btn {
   background: linear-gradient(135deg, rgba(252, 110, 174, 0.16) 0%, rgba(244, 122, 52, 0.16) 100%);
   border: 1.5px solid #fc6eae;
@@ -3093,6 +3486,13 @@ html, body {
   }
   .studio-selection-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Completely hide 3D Robot & Thought Bubble on Mobile & Tablet */
+  .robot-thought-bubble-container,
+  .robot-summary-card,
+  .robot-thought-cloud-btn {
+    display: none !important;
   }
 
   /* Prompt Hero Bar in tablet */

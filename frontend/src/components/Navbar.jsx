@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, Zap, Sun, Moon, Flame } from 'lucide-react';
+import { Sparkles, Sun, Moon, Flame } from 'lucide-react';
 
 export default function Navbar({ theme, setTheme, sessionTokens }) {
   return (
@@ -16,10 +16,7 @@ export default function Navbar({ theme, setTheme, sessionTokens }) {
       </div>
 
       <div className="nav-actions">
-        <div className="status-pill" title="4-Tier Multi-Provider LLM Cascade active: Gemini, Mistral, Groq, Heuristic">
-          <span className="status-dot" aria-hidden="true"></span>
-          <span>⚡ Gemini 3.6 Flash Active</span>
-        </div>
+
 
         <div className="token-pill" title="Tokens processed in current session">
           <Flame size={13} aria-hidden="true" />

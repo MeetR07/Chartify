@@ -58,7 +58,7 @@ export default function App() {
   const [sessionTokens, setSessionTokens] = useState(0);
   const [chartHistory, setChartHistory] = useState([]);
   const [zoomModal, setZoomModal] = useState(false);
-  const [viewMode, setViewMode] = useState('3d');
+  const [viewMode, setViewMode] = useState('2d');
   const [datasetModal, setDatasetModal] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'error' });
@@ -223,6 +223,7 @@ export default function App() {
             }
           };
           setActiveChart(newChart);
+          setViewMode('2d');
           setChartHistory((prev) => [newChart, ...prev]);
           setSessionTokens((prev) => prev + (data.tokens?.total || 0));
         } else {
@@ -269,10 +270,13 @@ export default function App() {
         });
         const data = await res.json();
         if (res.ok && data.success) {
+          const preservedChartData = (data.chart_data && Object.keys(data.chart_data).length > 0)
+            ? data.chart_data
+            : activeChart.chart_data;
           const updatedChart = {
             ...activeChart,
             url: data.chart_url,
-            chart_data: data.chart_data || activeChart.chart_data,
+            chart_data: preservedChartData,
             args: {
               ...activeChart.args,
               ...data.tool_args,
@@ -336,25 +340,54 @@ export default function App() {
   // Surprise Me on canvas toolbar strictly randomizes the color palette & theme of the chart
   const handleSurpriseMe = handleRandomStyle;
 
-  // Download Chart PNG
+  // Download Chart PNG (Dual Bulletproof Export: Direct Python save + Windows Explorer open + Browser download)
   const handleDownload = (e) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    if (!activeChart?.url) return;
-    try {
-      const tempLink = document.createElement('a');
-      tempLink.href = activeChart.url;
-      tempLink.download = `${activeChart.chart_type || 'chart'}.png`;
-      document.body.appendChild(tempLink);
-      tempLink.click();
-      document.body.removeChild(tempLink);
-      setToast({ message: 'High-res PNG downloaded successfully!', type: 'success' });
-    } catch (err) {
-      console.error('Download failed:', err);
-      setToast({ message: 'Chart download failed', type: 'error' });
+    if (!activeChart?.url) {
+      setToast({ message: 'No chart available to export', type: 'error' });
+      return;
     }
+
+    const cleanTitle = (activeChart.title || activeChart.chart_type || 'chart')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .toLowerCase();
+    const filename = cleanTitle.endsWith('.png') ? cleanTitle : `${cleanTitle}.png`;
+    const url = activeChart.url;
+
+    // 1. Direct Python Backend Save -> writes to C:\Users\admin\Downloads & highlights in Windows Explorer
+    fetch('/api/export-to-downloads', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_data: url, filename: filename })
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setToast({ message: `Saved to Downloads: ${filename} 📂✨`, type: 'success' });
+        }
+      })
+      .catch((err) => console.warn('Background Python save:', err));
+
+    // 2. Direct browser download trigger via native anchor
+    try {
+      const link = document.createElement('a');
+      link.download = filename;
+      link.href = url.startsWith('data:') ? url : `/api/charts/download/${encodeURIComponent(filename)}`;
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        try {
+          document.body.removeChild(link);
+        } catch (_) {}
+      }, 500);
+    } catch (err) {
+      console.warn('Browser anchor download error:', err);
+    }
+
+    setToast({ message: `Exporting ${filename}... 📥`, type: 'success' });
   };
 
   // History Carousel Handlers
@@ -402,15 +435,19 @@ export default function App() {
   const handleSelectChartType = (chartType) => {
     setSelectedChartType(chartType);
     if (chartType) {
-      const accurateQuery = generateAccurateChartQuery(chartType, dataset);
-      if (accurateQuery) {
-        setQuery(accurateQuery);
-      }
+      const prefix = generateAccurateChartQuery(chartType);
+      setQuery(prefix);
     } else {
       setQuery('');
     }
     if (inputRef.current) {
       inputRef.current.focus();
+      setTimeout(() => {
+        if (inputRef.current) {
+          const len = inputRef.current.value.length;
+          inputRef.current.setSelectionRange(len, len);
+        }
+      }, 10);
     }
   };
 

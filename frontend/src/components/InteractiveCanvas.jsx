@@ -14,10 +14,10 @@ export default function InteractiveCanvas({
   onQuickPrompt,
   handleRandomStyle,
   handleSurpriseMe,
-  viewMode = '3d',
+  viewMode = '2d',
   setViewMode
 }) {
-  const [internalViewMode, setInternalViewMode] = useState('3d');
+  const [internalViewMode, setInternalViewMode] = useState('2d');
   const currentViewMode = setViewMode ? viewMode : internalViewMode;
   const changeViewMode = setViewMode || setInternalViewMode;
 
@@ -126,6 +126,8 @@ export default function InteractiveCanvas({
                 alt={activeChart.title || 'Generated AI Chart'}
                 className={`chart-image ${isRestyling ? 'chart-blur' : ''}`}
               />
+
+
 
               {isRestyling && (
                 <div className="restyling-overlay" role="status">

@@ -4,9 +4,9 @@ import sys
 import time
 import base64
 from typing import Optional, Dict, Any
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 import pandas as pd
 import matplotlib
@@ -67,6 +67,14 @@ class StyleRequest(BaseModel):
     palette: Optional[str] = "deep"
 
 
+class SummarizeRequest(BaseModel):
+    query: Optional[str] = ""
+    chart_type: Optional[str] = "chart"
+    tool_args: Optional[Dict[str, Any]] = None
+    chart_data: Optional[Dict[str, Any]] = None
+    chart_url: Optional[str] = None
+
+
 import asyncio
 import threading
 from collections import OrderedDict
@@ -123,11 +131,33 @@ LLM_CACHE = ScalableLRUCache(maxsize=500, ttl_seconds=3600)
 
 # Thread-safe synchronization lock for Matplotlib figure canvas
 RENDER_LOCK = threading.Lock()
+CHARTS_CACHE_DIR = os.path.join(os.getcwd(), "generated_charts")
+os.makedirs(CHARTS_CACHE_DIR, exist_ok=True)
+LATEST_CHART_BYTES = None
+LATEST_CHART_FILENAME = "chart.png"
 
 def render_chart_safe(args):
-    """Thread-safe renderer for Studio Matplotlib PNG."""
+    """Thread-safe renderer for Studio Matplotlib PNG, saves to disk and caches bytes for direct download."""
+    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
     with RENDER_LOCK:
-        return charts.generate_chart.invoke(args)
+        data_url = charts.generate_chart.invoke(args)
+        if isinstance(data_url, str) and data_url.startswith("data:image/png;base64,"):
+            try:
+                b64_part = data_url.split(",", 1)[1]
+                LATEST_CHART_BYTES = base64.b64decode(b64_part)
+                title = args.get("title") or args.get("chart_type") or "chart"
+                clean_title = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(title).lower())
+                LATEST_CHART_FILENAME = f"{clean_title}.png"
+                
+                # Write to disk so URL downloads with real .png extension always succeed
+                file_path = os.path.join(CHARTS_CACHE_DIR, LATEST_CHART_FILENAME)
+                with open(file_path, "wb") as f:
+                    f.write(LATEST_CHART_BYTES)
+                with open(os.path.join(CHARTS_CACHE_DIR, "latest.png"), "wb") as f:
+                    f.write(LATEST_CHART_BYTES)
+            except Exception as e:
+                print("Failed caching latest chart bytes:", e)
+        return data_url
 
 
 @app.get("/api/health")
@@ -384,6 +414,43 @@ async def apply_style_endpoint(req: Dict[str, Any]):
 
 
 
+@app.post("/api/summarize-chart")
+async def summarize_chart_endpoint(req: SummarizeRequest):
+    """Feeds the active chart image & data points to the LLM to generate an executive summary."""
+    try:
+        current_df = main.df
+        tool_args = dict(req.tool_args or {})
+        chart_type = req.chart_type or tool_args.get("chart_type", "chart")
+        query = req.query or tool_args.get("query", "")
+
+        chart_result = {
+            "chart_type": chart_type,
+            "tool_args": tool_args,
+            "chart_data": req.chart_data or charts.get_last_chart_data(),
+            "chart_filename": f"{chart_type}.png",
+            "chart_url": req.chart_url
+        }
+
+        # Invoke LLM summarization asynchronously in a non-blocking worker thread
+        summary_res = await asyncio.to_thread(
+            main.summarize_chart_with_llm,
+            chart_result,
+            query,
+            current_df
+        )
+
+        return {
+            "success": True,
+            "summary": summary_res.get("summary", ""),
+            "model": summary_res.get("model", "AI Analyst"),
+            "chart_type": chart_type
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/charts/{filename}")
 def get_chart_image(filename: str):
     """Returns the generated PNG image strictly for inline display (never auto-downloads)."""
@@ -396,3 +463,185 @@ def get_chart_image(filename: str):
         content_disposition_type="inline",
         headers={"Content-Disposition": "inline"}
     )
+
+
+class ExportRequest(BaseModel):
+    image_data: Optional[str] = None
+    filename: Optional[str] = "chart.png"
+
+
+@app.post("/api/export-png")
+def export_png_endpoint(req: ExportRequest):
+    """Guaranteed attachment download endpoint setting Content-Disposition: attachment."""
+    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
+    try:
+        img_bytes = None
+        if req.image_data and "base64," in req.image_data:
+            b64_part = req.image_data.split("base64,", 1)[1]
+            img_bytes = base64.b64decode(b64_part)
+        elif LATEST_CHART_BYTES:
+            img_bytes = LATEST_CHART_BYTES
+
+        if not img_bytes:
+            raise HTTPException(status_code=404, detail="No chart image available to export.")
+
+        safe_fn = (req.filename or LATEST_CHART_FILENAME or "chart.png").replace('"', '').strip()
+        if not safe_fn.endswith(".png"):
+            safe_fn += ".png"
+
+        return Response(
+            content=img_bytes,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_fn}"',
+                "Content-Type": "image/png",
+                "Cache-Control": "no-cache"
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/download-chart")
+def download_latest_chart_endpoint(filename: Optional[str] = None):
+    """Direct browser GET download endpoint that triggers system save dialog."""
+    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
+    if not LATEST_CHART_BYTES:
+        raise HTTPException(status_code=404, detail="No chart generated yet to download.")
+
+    safe_fn = (filename or LATEST_CHART_FILENAME or "chart.png").replace('"', '').strip()
+    if not safe_fn.endswith(".png"):
+        safe_fn += ".png"
+
+    return Response(
+        content=LATEST_CHART_BYTES,
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_fn}"',
+            "Content-Type": "image/png",
+            "Cache-Control": "no-cache"
+        }
+    )
+
+
+@app.get("/api/charts/download/{filename}")
+def download_chart_by_filename_endpoint(filename: str):
+    """Direct URL download with exact filename ending in .png (ensures browser never uses UUID)."""
+    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
+    safe_fn = filename.strip().replace('"', '')
+    if not safe_fn.endswith(".png"):
+        safe_fn += ".png"
+    filepath = os.path.join(CHARTS_CACHE_DIR, safe_fn)
+    latest_path = os.path.join(CHARTS_CACHE_DIR, "latest.png")
+    
+    target_path = filepath if os.path.exists(filepath) else (latest_path if os.path.exists(latest_path) else None)
+    if target_path:
+        return FileResponse(
+            target_path,
+            media_type="image/png",
+            filename=safe_fn,
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_fn}"',
+                "Content-Type": "image/png"
+            }
+        )
+    elif LATEST_CHART_BYTES:
+        return Response(
+            content=LATEST_CHART_BYTES,
+            media_type="image/png",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_fn}"',
+                "Content-Type": "image/png"
+            }
+        )
+    raise HTTPException(status_code=404, detail="Chart not found")
+
+
+@app.post("/api/save-chart")
+def save_chart_endpoint(req: ExportRequest):
+    """Saves any chart image to disk cache so it can be downloaded with its exact .png name."""
+    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
+    try:
+        raw_b64 = req.image_data or ""
+        if "base64," in raw_b64:
+            raw_b64 = raw_b64.split("base64,", 1)[1]
+        img_bytes = base64.b64decode(raw_b64) if raw_b64 else LATEST_CHART_BYTES
+        if not img_bytes:
+            raise HTTPException(status_code=400, detail="No image data provided")
+        
+        safe_fn = (req.filename or "chart.png").strip().replace('"', '')
+        if not safe_fn.endswith(".png"):
+            safe_fn += ".png"
+            
+        filepath = os.path.join(CHARTS_CACHE_DIR, safe_fn)
+        with open(filepath, "wb") as f:
+            f.write(img_bytes)
+        with open(os.path.join(CHARTS_CACHE_DIR, "latest.png"), "wb") as f:
+            f.write(img_bytes)
+            
+        LATEST_CHART_BYTES = img_bytes
+        LATEST_CHART_FILENAME = safe_fn
+        return {"success": True, "download_url": f"/api/charts/download/{safe_fn}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/export-to-downloads")
+def export_directly_to_user_downloads(req: ExportRequest):
+    """Saves the chart PNG directly into the user's OS Downloads folder via Python."""
+    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
+    try:
+        raw_b64 = req.image_data or ""
+        if "base64," in raw_b64:
+            raw_b64 = raw_b64.split("base64,", 1)[1]
+        img_bytes = base64.b64decode(raw_b64) if raw_b64 else LATEST_CHART_BYTES
+        if not img_bytes:
+            raise HTTPException(status_code=400, detail="No image data provided to export.")
+        
+        safe_fn = (req.filename or "chart.png").strip().replace('"', '')
+        if not safe_fn.endswith(".png"):
+            safe_fn += ".png"
+            
+        # 1. Save directly into OS Downloads folder (C:\Users\<user>\Downloads)
+        user_downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        os.makedirs(user_downloads_dir, exist_ok=True)
+        downloads_target_path = os.path.join(user_downloads_dir, safe_fn)
+        with open(downloads_target_path, "wb") as f:
+            f.write(img_bytes)
+            
+        # 2. Also save into project generated_charts folder
+        cache_path = os.path.join(CHARTS_CACHE_DIR, safe_fn)
+        with open(cache_path, "wb") as f:
+            f.write(img_bytes)
+        with open(os.path.join(CHARTS_CACHE_DIR, "latest.png"), "wb") as f:
+            f.write(img_bytes)
+            
+        LATEST_CHART_BYTES = img_bytes
+        LATEST_CHART_FILENAME = safe_fn
+
+        # 3. Highlight the downloaded file in Windows Explorer so user immediately sees it
+        try:
+            import subprocess
+            subprocess.Popen(["explorer.exe", f"/select,{downloads_target_path}"])
+        except Exception as exp_err:
+            print("Explorer highlight warning:", exp_err)
+        
+        return {
+            "success": True,
+            "filename": safe_fn,
+            "file_path": downloads_target_path,
+            "message": f"Successfully saved {safe_fn} directly to your Downloads folder!",
+            "download_url": f"/api/charts/download/{safe_fn}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+

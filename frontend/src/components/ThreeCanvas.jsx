@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Play, Pause, RotateCcw, Box, Eye, Sparkles, Hash, Layers } from 'lucide-react';
+import { Play, Pause, RotateCcw, Box, Eye, Sparkles, Hash, Layers, Heart } from 'lucide-react';
+import { createCutePetRobot } from './CutePetRobot';
 
 const PALETTE_MAP = {
   butter_green: ['#013E37', '#FFEFB3', '#08ab9c', '#f47a34', '#fc6eae', '#ffbd29', '#146665'],
@@ -633,6 +634,63 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
   const controlsRef = useRef(null);
   const animFrameRef = useRef(null);
   const interactiveObjectsRef = useRef([]);
+  const robotRef = useRef(null);
+  const thoughtBubbleRef = useRef(null);
+
+  // 💭 Cute Robot AI Summary States
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryResult, setSummaryResult] = useState(null);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [summaryError, setSummaryError] = useState(null);
+
+  // Reset summary state whenever chart changes
+  useEffect(() => {
+    setSummaryResult(null);
+    setSummaryExpanded(false);
+    setSummaryError(null);
+    setSummaryLoading(false);
+  }, [activeChart?.id, activeChart?.chart_url]);
+
+  const handleTriggerSummary = async () => {
+    if (summaryLoading) return;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    if (robotRef.current?.burst) {
+      robotRef.current.burst(10);
+    }
+
+    try {
+      const payload = {
+        query: activeChart?.args?.query || activeChart?.title || 'Summarize this chart',
+        chart_type: activeChart?.chart_type || activeChart?.args?.chart_type || 'chart',
+        tool_args: activeChart?.args || {},
+        chart_data: activeChart?.chart_data || null,
+        chart_url: activeChart?.chart_url || null
+      };
+
+      const res = await fetch('http://localhost:8000/api/summarize-chart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status}`);
+      }
+
+      const data = await res.json();
+      setSummaryResult(data);
+      setSummaryExpanded(true);
+      if (robotRef.current?.burst) {
+        robotRef.current.burst(12);
+      }
+    } catch (err) {
+      console.error('Failed to summarize chart with AI:', err);
+      setSummaryError('Could not summarize. Tap to retry.');
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
 
   // Resolve Active Keys & Background Theme (Memoized to prevent new reference creation on re-render)
   const activePaletteKey = selectedPalette || activeChart?.args?.palette || 'butter_green';
@@ -657,10 +715,17 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     const width = container.clientWidth || 600;
     const height = container.clientHeight || 450;
 
+    const isHeatmap = chartType.includes('heatmap') || chartType.includes('correlation');
+    const isTreemap = chartType.includes('treemap') || chartType.includes('tree');
+
     // 2. Camera (Slight isometric angle for 3D mesh view matching reference design)
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
     if (displayMode === 'card') {
-      camera.position.set(0, 5.7, 18.5);
+      camera.position.set(0.0, 6.2, 21.5);
+    } else if (isHeatmap) {
+      camera.position.set(0, 12.0, 15.0);
+    } else if (isTreemap) {
+      camera.position.set(0, 14.0, 16.0);
     } else {
       camera.position.set(2.8, 8.2, 17.5);
     }
@@ -685,6 +750,9 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     controls.maxPolarAngle = Math.PI / 2 - 0.02; // Don't go below floor
     controls.minDistance = 6;
     controls.maxDistance = 50;
+    controls.enableRotate = true; // Fully movable 3D chart!
+    controls.enablePan = true;
+    controls.enableZoom = true;
     controls.autoRotate = autoRotate;
     controls.autoRotateSpeed = 1.2;
     controls.rotateSpeed = isMobile ? 0.75 : 1.0;
@@ -693,9 +761,13 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
       TWO: THREE.TOUCH.DOLLY_PAN
     };
     if (displayMode === 'card') {
-      controls.target.set(0, 5.7, 0);
+      controls.target.set(-0.5, 5.0, 0);
+    } else if (isHeatmap) {
+      controls.target.set(0, 0.2, 0);
+    } else if (isTreemap) {
+      controls.target.set(0, 0.35, 0);
     } else {
-      controls.target.set(0, 3.8, 0);
+      controls.target.set(0, 4.0, 0);
     }
     controls.update();
     controlsRef.current = controls;
@@ -722,14 +794,14 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     scene.add(frontLight);
 
     // 6. Floor Grid with Dynamic Theme Colors
-    const gridHelper = new THREE.GridHelper(24, 24, bgTheme.gridColor, bgTheme.gridColor);
+    const gridHelper = new THREE.GridHelper(30, 30, bgTheme.gridColor, bgTheme.gridColor);
     gridHelper.position.y = 0;
     gridHelper.material.opacity = bgTheme.gridOpacity;
     gridHelper.material.transparent = true;
     scene.add(gridHelper);
 
     // Floor plane for soft shadows
-    const floorGeo = new THREE.PlaneGeometry(28, 28);
+    const floorGeo = new THREE.PlaneGeometry(36, 36);
     const floorMat = new THREE.ShadowMaterial({ opacity: bgTheme.floorShadowOpacity });
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
@@ -739,6 +811,34 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     // 7. Build 3D Visualization based on Chart Type with Active Palette, Theme Accent & Permanent Data Numbers
     interactiveObjectsRef.current = [];
     build3DChart(scene, activeChart, dataset, wireframe, interactiveObjectsRef.current, paletteColors, bgTheme.accentColor, showLabels, bgTheme.isDark, displayMode, bgTheme);
+
+    // Cute Pet Robot companion in 3D Card Section ONLY (compact & petite beside the 3D card) - Desktop/Tablet only, hidden on mobile
+    if (displayMode === 'card' && !isMobile) {
+      const robotInstance = createCutePetRobot({
+        scene,
+        camera,
+        domElement: renderer.domElement,
+        position: [10.5, 0, 1.2],
+        scale: 0.72,
+        rotationY: -Math.PI / 6,
+        onPetClick: () => {
+          handleTriggerSummary();
+        }
+      });
+      robotRef.current = robotInstance;
+
+      if (robotInstance?.pet) {
+        robotInstance.pet.traverse((child) => {
+          if (child.isMesh) {
+            child.userData = {
+              label: 'Cute Pet Robot 💖',
+              val: '💭 Click to summarize chart with AI!'
+            };
+            interactiveObjectsRef.current.push(child);
+          }
+        });
+      }
+    }
 
     // 8. Raycaster for Mouse Hover Tooltips (direct DOM to prevent React re-renders)
     const raycaster = new THREE.Raycaster();
@@ -788,32 +888,74 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
 
     // 9. Animation Loop
     let startScaling = 0;
+    const clock = new THREE.Clock();
     const animate = () => {
       animFrameRef.current = requestAnimationFrame(animate);
       controls.update();
 
-      // Gentle entry scale animation for meshes & 3D cards
+      const dt = Math.min(clock.getDelta(), 0.05);
+      const elapsed = clock.elapsedTime;
+      const currentIsMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+      if (robotRef.current?.group) {
+        robotRef.current.group.visible = !currentIsMobile;
+      }
+      if (!currentIsMobile && robotRef.current) {
+        robotRef.current.update(dt, elapsed);
+      }
+
+      // Project robot 3D head position to 2D viewport coordinates for floating thought bubble (Desktop only)
+      if (!currentIsMobile && robotRef.current?.head) {
+        const headVec = new THREE.Vector3();
+        robotRef.current.head.getWorldPosition(headVec);
+        headVec.y += 0.85; // Just above antenna
+        headVec.project(camera);
+        if (headVec.z < 1 && thoughtBubbleRef.current) {
+          const screenX = (headVec.x * 0.5 + 0.5) * width;
+          const screenY = (-headVec.y * 0.5 + 0.5) * height;
+          // Position thought bubble to the right side of the robot's head per user request
+          const cloudRightX = Math.min(Math.max(screenX + 75, 160), width - 160);
+          const clampedY = Math.max(screenY + 12, 205);
+          thoughtBubbleRef.current.style.transform = `translate3d(calc(${cloudRightX}px - 50%), calc(${clampedY}px - 100%), 0)`;
+          thoughtBubbleRef.current.style.display = 'flex';
+        } else if (thoughtBubbleRef.current) {
+          thoughtBubbleRef.current.style.display = 'none';
+        }
+      } else if (thoughtBubbleRef.current) {
+        thoughtBubbleRef.current.style.display = 'none';
+      }
+
+      // Gentle entry scale animation & floating levitation for 3D card
       if (startScaling < 1) {
         startScaling += 0.04;
-        interactiveObjectsRef.current.forEach((obj) => {
-          if (obj.userData?.isCard) {
+      }
+      interactiveObjectsRef.current.forEach((obj) => {
+        if (obj.userData?.isCard) {
+          if (startScaling < 1) {
             const s = THREE.MathUtils.lerp(0.01, 1, startScaling);
             obj.scale.set(s, s, s);
-          } else if (obj.userData?.isBeveledBar) {
-            const s = THREE.MathUtils.lerp(0.01, 1, startScaling);
-            obj.scale.y = s;
-            if (obj.userData.badge) {
-              obj.userData.badge.position.y = (obj.userData.barHeight * s) + 0.72;
-            }
-          } else if (obj.userData?.origScaleY) {
-            obj.scale.y = THREE.MathUtils.lerp(0.01, obj.userData.origScaleY, startScaling);
-            obj.position.y = (obj.scale.y * (obj.userData.baseHeight || 1)) / 2;
-            if (obj.userData?.labelMesh) {
-              obj.userData.labelMesh.position.y = (obj.scale.y * (obj.userData.baseHeight || 1)) + 0.015;
+          }
+          if (obj.userData.baseY !== undefined) {
+            const floatOffset = Math.sin(elapsed * 1.5) * 0.12;
+            obj.position.y = obj.userData.baseY + floatOffset;
+            if (obj.userData.floorShadow) {
+              const shadowScale = 1 - floatOffset * 0.35;
+              obj.userData.floorShadow.scale.set(shadowScale, shadowScale, 1);
             }
           }
-        });
-      }
+        } else if (obj.userData?.isBeveledBar) {
+          const s = THREE.MathUtils.lerp(0.01, 1, startScaling);
+          obj.scale.y = s;
+          if (obj.userData.badge) {
+            obj.userData.badge.position.y = (obj.userData.barHeight * s) + 0.72;
+          }
+        } else if (obj.userData?.origScaleY) {
+          obj.scale.y = THREE.MathUtils.lerp(0.01, obj.userData.origScaleY, startScaling);
+          obj.position.y = (obj.scale.y * (obj.userData.baseHeight || 1)) / 2;
+          if (obj.userData?.labelMesh) {
+            obj.userData.labelMesh.position.y = (obj.scale.y * (obj.userData.baseHeight || 1)) + 0.015;
+          }
+        }
+      });
 
       renderer.render(scene, camera);
     };
@@ -828,6 +970,14 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+
+      const currentIsMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+      if (robotRef.current?.group) {
+        robotRef.current.group.visible = !currentIsMobile;
+      }
+      if (currentIsMobile && thoughtBubbleRef.current) {
+        thoughtBubbleRef.current.style.display = 'none';
+      }
     };
 
     const resizeObserver = new ResizeObserver(() => {
@@ -844,6 +994,10 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
 
     // Cleanup
     return () => {
+      if (robotRef.current) {
+        robotRef.current.dispose();
+        robotRef.current = null;
+      }
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (resizeRaf) cancelAnimationFrame(resizeRaf);
       resizeObserver.disconnect();
@@ -866,24 +1020,34 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     showLabels,
     displayMode,
     activePaletteKey,
-    activeStyleKey
+    activeStyleKey,
+    JSON.stringify(activeChart?.chart_data || {})
   ]);
 
   // Update controls auto-rotate dynamically
   useEffect(() => {
     if (controlsRef.current) {
       controlsRef.current.autoRotate = autoRotate;
+      controlsRef.current.enableRotate = true;
     }
   }, [autoRotate]);
 
   const handleResetCamera = () => {
     if (cameraRef.current && controlsRef.current) {
+      const isHeatmap = chartType.includes('heatmap') || chartType.includes('correlation');
+      const isTreemap = chartType.includes('treemap') || chartType.includes('tree');
       if (displayMode === 'card') {
-        cameraRef.current.position.set(0, 5.7, 18.5);
-        controlsRef.current.target.set(0, 5.7, 0);
+        cameraRef.current.position.set(0.0, 6.2, 21.5);
+        controlsRef.current.target.set(-0.5, 5.0, 0);
+      } else if (isHeatmap) {
+        cameraRef.current.position.set(0, 12.0, 15.0);
+        controlsRef.current.target.set(0, 0.2, 0);
+      } else if (isTreemap) {
+        cameraRef.current.position.set(0, 14.0, 16.0);
+        controlsRef.current.target.set(0, 0.35, 0);
       } else {
         cameraRef.current.position.set(2.8, 8.2, 17.5);
-        controlsRef.current.target.set(0, 3.8, 0);
+        controlsRef.current.target.set(0, 4.0, 0);
       }
       controlsRef.current.update();
     }
@@ -899,6 +1063,151 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     >
       <div ref={mountRef} className="three-viewport" />
 
+      {/* 💭 Cute Robot AI Summary Thought Bubble Overlay (3D Card Mode Only - Desktop only) */}
+      {displayMode === 'card' && !isMobile && (
+        <div
+          ref={thoughtBubbleRef}
+          className={`robot-thought-bubble-container ${summaryExpanded ? 'expanded' : ''} ${bgTheme.isDark ? 'dark' : ''}`}
+          style={{ display: 'none' }}
+        >
+          {!summaryExpanded ? (
+            <button
+              type="button"
+              className={`robot-thought-cloud-btn ${summaryLoading ? 'loading' : ''} ${summaryError ? 'error' : ''}`}
+              onClick={handleTriggerSummary}
+              title="Click to have AI summarize this chart"
+            >
+              <svg
+                viewBox="0 0 260 145"
+                className="thought-cloud-svg"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  className="thought-cloud-path"
+                  d="M 65 45
+                     A 30 30 0 0 1 115 25
+                     A 35 35 0 0 1 175 25
+                     A 30 30 0 0 1 220 48
+                     A 26 26 0 0 1 236 82
+                     A 28 28 0 0 1 195 110
+                     A 35 35 0 0 1 135 114
+                     A 32 32 0 0 1 75 108
+                     A 28 28 0 0 1 40 75
+                     A 26 26 0 0 1 65 45 Z"
+                />
+                <circle className="thought-cloud-tail-c1" cx="72" cy="124" r="7" />
+                <circle className="thought-cloud-tail-c2" cx="50" cy="138" r="4.5" />
+              </svg>
+
+              <div className="thought-cloud-content">
+                {summaryLoading ? (
+                  <div className="cloud-text-loading">
+                    <span>Analyzing chart...</span>
+                    <span className="cloud-pulse-dot" />
+                  </div>
+                ) : summaryError ? (
+                  <div className="cloud-text-error">
+                    <span>{summaryError}</span>
+                  </div>
+                ) : (
+                  <div className="cloud-text-normal">
+                    <span className="cloud-line-1">Can I summarize</span>
+                    <span className="cloud-line-2">for you? ✨</span>
+                  </div>
+                )}
+              </div>
+            </button>
+          ) : (
+            <div className="robot-summary-card">
+              <div className="summary-card-header">
+                <div className="summary-card-title">
+                  <span className="summary-emoji">💭</span>
+                  <span>AI Executive Summary</span>
+                  {summaryResult?.model && (
+                    <span className="summary-model-pill">{summaryResult.model}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="summary-close-btn"
+                  onClick={() => setSummaryExpanded(false)}
+                  title="Close summary"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="summary-card-body">
+                {summaryResult?.summary ? (
+                  <div className="summary-text-content">
+                    {summaryResult.summary.split('\n\n').map((paragraph, pIdx) => {
+                      const lines = paragraph.split('\n');
+                      return (
+                        <div key={pIdx} className="summary-paragraph">
+                          {lines.map((line, lIdx) => {
+                            const trimmed = line.trim();
+                            if (
+                              trimmed.startsWith('📊') ||
+                              trimmed.startsWith('🔍') ||
+                              trimmed.startsWith('📈') ||
+                              trimmed.startsWith('💡') ||
+                              trimmed.startsWith('**') ||
+                              trimmed.startsWith('#')
+                            ) {
+                              return (
+                                <h4 key={lIdx} className="summary-section-heading">
+                                  {trimmed.replace(/\*\*/g, '').replace(/^#+\s*/, '')}
+                                </h4>
+                              );
+                            }
+                            if (trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('*')) {
+                              return (
+                                <p key={lIdx} className="summary-bullet">
+                                  {trimmed.replace(/\*\*/g, '')}
+                                </p>
+                              );
+                            }
+                            return (
+                              <p key={lIdx} className="summary-line">
+                                {trimmed.replace(/\*\*/g, '')}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="summary-empty">Generating summary...</p>
+                )}
+              </div>
+
+              <div className="summary-card-footer">
+                <button
+                  type="button"
+                  className="summary-reanalyze-btn"
+                  onClick={handleTriggerSummary}
+                  disabled={summaryLoading}
+                >
+                  {summaryLoading ? 'Refreshing...' : '🔄 Re-Analyze'}
+                </button>
+                <button
+                  type="button"
+                  className="summary-minimize-btn"
+                  onClick={() => setSummaryExpanded(false)}
+                >
+                  Minimize 💭
+                </button>
+              </div>
+
+              <div className="thought-bubbles-tail">
+                <span className="tail-dot tail-dot-1" />
+                <span className="tail-dot tail-dot-2" />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
       {/* Floating 3D Hover Tooltip (Zero re-renders on pointer move) */}
       <div
         ref={tooltipRef}
@@ -980,18 +1289,10 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
         </button>
       </div>
 
-      {/* 3D Mode Watermark */}
-      <div
-        className={`three-badge-watermark ${bgTheme.isDark ? 'dark' : ''}`}
-        style={bgTheme.isDark ? {
-          background: 'rgba(15, 23, 42, 0.88)',
-          color: '#38bdf8',
-          borderColor: '#38bdf8'
-        } : {}}
-      >
-        <Sparkles size={12} />
-        <span>{displayMode === 'card' ? 'THREE.JS 3D CARD' : 'THREE.JS 3D ENGINE'}</span>
-      </div>
+
+
+      {/* Cute Pet Robot Companion hint badge in 3D Card Mode */}
+
     </div>
   );
 }
@@ -1014,8 +1315,9 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
     return;
   }
 
-  // Pure 3D Mode: Backdrop card removed per user request ("iske piche ka card hata de")
-  // 3D physical elements render directly in 3D space with their own axes, grid, and lighting.
+  // Pure 3D Mode: Enlarge 3D mesh visualization & center it cleanly in viewport
+  chartGroup.scale.set(1.3, 1.3, 1.3);
+  chartGroup.position.set(0, 0, 0);
 
   const allRows = dataset?.sample_data?.length ? dataset.sample_data : (dataset?.head_rows || []);
   const args = activeChart?.args || {};
@@ -1027,7 +1329,16 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
 
   // Use the exact columns resolved by backend Python engine
   let yCol = chartData?.y_col || args.y_col;
-  let xCol = chartData?.x_col || args.x_col || catCols[0] || allCols[0];
+  let xCol = chartData?.x_col || args.x_col;
+
+  if (['histogram', 'hist'].some(t => chartType.includes(t))) {
+    if (!xCol || !numCols.includes(xCol)) {
+      xCol = (yCol && numCols.includes(yCol)) ? yCol : (numCols[0] || allCols[0]);
+    }
+    yCol = 'count';
+  } else {
+    if (!xCol) xCol = catCols[0] || allCols[0];
+  }
 
   let effYCol = yCol || numCols[0] || allCols[0];
   let effXCol = xCol || catCols[0] || allCols[1] || allCols[0];
@@ -1088,31 +1399,31 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
   if (['histogram', 'hist'].some(t => chartType.includes(t))) {
     build3DHistogram(chartGroup, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, chartData);
   } else if (['box'].some(t => chartType.includes(t))) {
-    build3DBoxPlot(chartGroup, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, false);
+    build3DBoxPlot(chartGroup, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, false, chartData);
   } else if (['violin'].some(t => chartType.includes(t))) {
-    build3DViolin(chartGroup, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, false);
+    build3DViolin(chartGroup, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, false, chartData);
   } else if (['waterfall'].some(t => chartType.includes(t))) {
-    build3DWaterfall(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol);
+    build3DWaterfall(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, chartData);
   } else if (['funnel'].some(t => chartType.includes(t))) {
-    build3DFunnel(chartGroup, dataPoints, wireframe, interactiveList, paletteColors, showLabels, isDark);
+    build3DFunnel(chartGroup, dataPoints, wireframe, interactiveList, paletteColors, showLabels, isDark, chartData);
   } else if (['lollipop'].some(t => chartType.includes(t))) {
-    build3DLollipop(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, false);
+    build3DLollipop(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, false, chartData);
   } else if (['radar', 'spider'].some(t => chartType.includes(t))) {
-    build3DRadar(chartGroup, allRows, numCols, catCols, effXCol, wireframe, interactiveList, paletteColors, showLabels, isDark);
+    build3DRadar(chartGroup, allRows, numCols, catCols, effXCol, wireframe, interactiveList, paletteColors, showLabels, isDark, chartData);
   } else if (['bubble'].some(t => chartType.includes(t))) {
-    build3DBubble(chartGroup, allRows, effXCol, effYCol, numCols, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark);
+    build3DBubble(chartGroup, allRows, effXCol, effYCol, numCols, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, chartData);
   } else if (['pairplot', 'pair'].some(t => chartType.includes(t))) {
-    build3DPairplot(chartGroup, allRows, numCols, wireframe, interactiveList, paletteColors, showLabels, isDark);
+    build3DPairplot(chartGroup, allRows, numCols, wireframe, interactiveList, paletteColors, showLabels, isDark, chartData);
   } else if (['scatter'].some(t => chartType.includes(t))) {
     build3DScatter(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, false, chartData, allRows);
   } else if (['pie', 'donut', 'doughnut'].some(t => chartType.includes(t))) {
-    build3DPieDonut(chartGroup, dataPoints, chartType.includes('donut') || chartType.includes('doughnut'), wireframe, interactiveList, paletteColors, showLabels, isDark);
+    build3DPieDonut(chartGroup, dataPoints, chartType.includes('donut') || chartType.includes('doughnut'), wireframe, interactiveList, paletteColors, showLabels, isDark, chartData);
   } else if (['line', 'area', 'trend'].some(t => chartType.includes(t))) {
-    build3DLineArea(chartGroup, dataPoints, maxVal, maxHeight, chartType.includes('area'), wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark);
+    build3DLineArea(chartGroup, dataPoints, maxVal, maxHeight, chartType.includes('area'), wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol);
   } else if (['heatmap', 'correlation'].some(t => chartType.includes(t))) {
-    build3DHeatmap(chartGroup, dataPoints, wireframe, interactiveList, paletteColors, showLabels, isDark);
+    build3DHeatmap(chartGroup, chartData, allRows, numCols, wireframe, interactiveList, paletteColors, showLabels, isDark);
   } else if (['treemap', 'tree'].some(t => chartType.includes(t))) {
-    build3DTreemap(chartGroup, dataPoints, maxVal, wireframe, interactiveList, paletteColors, showLabels, isDark);
+    build3DTreemap(chartGroup, dataPoints, maxVal, wireframe, interactiveList, paletteColors, showLabels, isDark, chartData);
   } else {
     // Bar and other fallbacks
     build3DBar(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, false);
@@ -1218,47 +1529,55 @@ function build2DBackdropCard(group, activeChart, wireframe, accentColor, isDark)
 }
 
 /**
- * 3D Holographic / Glass Card Presentation
- * Glues the 2D chart (histogram, KDE, etc.) directly onto an interactive 3D physical slab with pedestal, lighting & shadows.
+ * 3D Holographic Floating Glass Display
+ * Elegant, borderless floating glass panel with ambient rim glow and soft floor shadow.
+ * Clean, modern presentation without clumsy pedestals or fake screws.
  */
 function build3DCard(group, activeChart, wireframe, interactiveList, accentColor, isDark, bgTheme) {
   const cardGroup = new THREE.Group();
   group.add(cardGroup);
 
-  const cardWidth = 14.0;
-  const initialCardHeight = 7.9; // 16:9 ratio
-  const depth = 0.38;
+  const cardWidth = 15.0;
+  const initialCardHeight = 9.5;
+  const depth = 0.35;
 
   const accentHex = typeof accentColor === 'number'
     ? accentColor
     : parseInt((accentColor || '#08ab9c').replace('#', ''), 16);
 
-  // 1. Slab Body (Metallic Back and Bevel Edges)
-  const slabGeo = new THREE.BoxGeometry(cardWidth + 0.5, initialCardHeight + 0.5, depth);
-  const slabMat = new THREE.MeshStandardMaterial({
-    color: isDark ? 0x0f172a : (typeof bgTheme?.gridColor === 'number' ? bgTheme.gridColor : 0x013e37),
-    roughness: 0.35,
-    metalness: 0.65,
+  // 1. Sleek Glassmorphic Backing Slab (Apple VisionOS / Holographic Aesthetic)
+  const slabGeo = new THREE.BoxGeometry(cardWidth + 0.3, initialCardHeight + 0.3, depth);
+  const slabMat = new THREE.MeshPhysicalMaterial({
+    color: isDark ? 0x0f172a : 0xf8fafc,
+    transmission: isDark ? 0.35 : 0.25,
+    opacity: 0.96,
+    transparent: true,
+    roughness: 0.15,
+    metalness: 0.15,
+    clearcoat: 0.9,
+    clearcoatRoughness: 0.1,
     wireframe: wireframe
   });
   const slab = new THREE.Mesh(slabGeo, slabMat);
   slab.castShadow = true;
-  slab.receiveShadow = true;
+  slab.receiveShadow = false;
   cardGroup.add(slab);
 
-  // 2. Beveled Glowing Rim / Frame
-  const frameGeo = new THREE.BoxGeometry(cardWidth + 0.7, initialCardHeight + 0.7, depth * 0.7);
-  const frameMat = new THREE.MeshStandardMaterial({
+  // 2. Micro Glowing Beveled Frame / Rim
+  const rimGeo = new THREE.BoxGeometry(cardWidth + 0.45, initialCardHeight + 0.45, depth * 0.85);
+  const rimMat = new THREE.MeshStandardMaterial({
     color: accentHex,
-    roughness: 0.2,
+    roughness: 0.25,
     metalness: 0.85,
+    emissive: accentHex,
+    emissiveIntensity: isDark ? 0.25 : 0.1,
     wireframe: wireframe
   });
-  const frame = new THREE.Mesh(frameGeo, frameMat);
-  frame.position.z = -0.05;
-  cardGroup.add(frame);
+  const rim = new THREE.Mesh(rimGeo, rimMat);
+  rim.position.z = -0.04;
+  cardGroup.add(rim);
 
-  // 3. Front Chart Canvas / Plane (where 2D chart is glued)
+  // 3. Front Crisp Chart Canvas Plane
   const frontGeo = new THREE.PlaneGeometry(cardWidth, initialCardHeight);
   const frontMat = new THREE.MeshBasicMaterial({
     color: 0xffffff,
@@ -1266,11 +1585,10 @@ function build3DCard(group, activeChart, wireframe, interactiveList, accentColor
     side: THREE.FrontSide
   });
   const frontMesh = new THREE.Mesh(frontGeo, frontMat);
-  frontMesh.position.z = depth / 2 + 0.015;
-  frontMesh.receiveShadow = false;
+  frontMesh.position.z = depth / 2 + 0.012;
   cardGroup.add(frontMesh);
 
-  // Load 2D chart image texture
+  // Load 2D chart image texture and dynamically adapt aspect ratio
   if (activeChart?.url) {
     const loader = new THREE.TextureLoader();
     loader.setCrossOrigin('anonymous');
@@ -1287,10 +1605,12 @@ function build3DCard(group, activeChart, wireframe, interactiveList, accentColor
 
         if (texture.image && texture.image.width && texture.image.height) {
           const imgAspect = texture.image.width / texture.image.height;
-          const newHeight = cardWidth / imgAspect;
-          frontMesh.scale.set(1, newHeight / initialCardHeight, 1);
-          slab.scale.set(1, (newHeight + 0.5) / (initialCardHeight + 0.5), 1);
-          frame.scale.set(1, (newHeight + 0.7) / (initialCardHeight + 0.7), 1);
+          const adaptedHeight = Math.min(Math.max(cardWidth / imgAspect, 8.0), 12.0);
+          const adaptedWidth = adaptedHeight * imgAspect;
+          
+          frontMesh.scale.set(adaptedWidth / cardWidth, adaptedHeight / initialCardHeight, 1);
+          slab.scale.set((adaptedWidth + 0.3) / (cardWidth + 0.3), (adaptedHeight + 0.3) / (initialCardHeight + 0.3), 1);
+          rim.scale.set((adaptedWidth + 0.45) / (cardWidth + 0.45), (adaptedHeight + 0.45) / (initialCardHeight + 0.45), 1);
         }
       },
       undefined,
@@ -1300,72 +1620,40 @@ function build3DCard(group, activeChart, wireframe, interactiveList, accentColor
     );
   }
 
-  // 4. Sleek Corner Screws / Cyber Pins
-  const pinGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.08, 16);
-  const pinMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.15 });
-  const cornerOffsets = [
-    [-cardWidth / 2 + 0.35, initialCardHeight / 2 - 0.35],
-    [cardWidth / 2 - 0.35, initialCardHeight / 2 - 0.35],
-    [-cardWidth / 2 + 0.35, -initialCardHeight / 2 + 0.35],
-    [cardWidth / 2 - 0.35, -initialCardHeight / 2 + 0.35]
-  ];
-  cornerOffsets.forEach(([cx, cy]) => {
-    const pin = new THREE.Mesh(pinGeo, pinMat);
-    pin.rotation.x = Math.PI / 2;
-    pin.position.set(cx, cy, depth / 2 + 0.04);
-    cardGroup.add(pin);
+  // 4. Ambient Soft Holographic Floor Shadow / Reflection Halo beneath floating card
+  const shadowGeo = new THREE.PlaneGeometry(cardWidth + 2, 4.5);
+  const shadowCanvas = document.createElement('canvas');
+  shadowCanvas.width = 256;
+  shadowCanvas.height = 128;
+  const sCtx = shadowCanvas.getContext('2d');
+  const grad = sCtx.createRadialGradient(128, 64, 10, 128, 64, 120);
+  grad.addColorStop(0, isDark ? 'rgba(0,0,0,0.55)' : 'rgba(1,62,55,0.22)');
+  grad.addColorStop(0.6, isDark ? 'rgba(0,0,0,0.2)' : 'rgba(1,62,55,0.06)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  sCtx.fillStyle = grad;
+  sCtx.fillRect(0, 0, 256, 128);
+  const shadowTexture = new THREE.CanvasTexture(shadowCanvas);
+  const shadowMat = new THREE.MeshBasicMaterial({
+    map: shadowTexture,
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false
   });
+  const floorShadow = new THREE.Mesh(shadowGeo, shadowMat);
+  floorShadow.rotation.x = -Math.PI / 2;
+  floorShadow.position.set(-4.2, 0.02, 0);
+  group.add(floorShadow);
 
-  // 5. 3D Pedestal / Stand on the Floor
-  const standGroup = new THREE.Group();
-  
-  // Base plate
-  const baseGeo = new THREE.CylinderGeometry(2.5, 3.0, 0.3, 32);
-  const baseMat = new THREE.MeshStandardMaterial({
-    color: isDark ? 0x1e293b : 0x013e37,
-    metalness: 0.75,
-    roughness: 0.3
-  });
-  const baseMesh = new THREE.Mesh(baseGeo, baseMat);
-  baseMesh.position.y = 0.15;
-  baseMesh.receiveShadow = true;
-  baseMesh.castShadow = true;
-  standGroup.add(baseMesh);
-
-  // Vertical support pillar
-  const pillarGeo = new THREE.CylinderGeometry(0.4, 0.45, 1.8, 24);
-  const pillarMat = new THREE.MeshStandardMaterial({
-    color: accentHex,
-    metalness: 0.85,
-    roughness: 0.2
-  });
-  const pillarMesh = new THREE.Mesh(pillarGeo, pillarMat);
-  pillarMesh.position.y = 1.0;
-  pillarMesh.castShadow = true;
-  standGroup.add(pillarMesh);
-
-  // Tilt bracket
-  const bracketGeo = new THREE.BoxGeometry(2.4, 0.5, 0.8);
-  const bracketMesh = new THREE.Mesh(bracketGeo, baseMat);
-  bracketMesh.position.y = 1.9;
-  standGroup.add(bracketMesh);
-
-  group.add(standGroup);
-
-  // Position the card above the stand facing directly forward (screen ke samne)
-  cardGroup.position.set(0, initialCardHeight / 2 + 1.8, 0);
+  // Position floating card gracefully above floor (elevated, no ugly stand!)
+  const baseY = initialCardHeight / 2 + 1.4;
+  cardGroup.position.set(-4.2, baseY, 0);
   cardGroup.rotation.x = 0;
 
-  // Make card interactive for hover
-  frontMesh.userData = {
-    label: activeChart?.title || '2D-to-3D Histogram Card',
-    val: `${(activeChart?.chart_type || 'histogram').toUpperCase()} (3D Card)`
-  };
-  interactiveList.push(frontMesh);
-
-  // Tag for entry scale animation
+  // Tag for entry animation & smooth levitation
   cardGroup.userData = {
-    isCard: true
+    isCard: true,
+    baseY: baseY,
+    floorShadow: floorShadow
   };
   interactiveList.push(cardGroup);
 
@@ -1621,8 +1909,8 @@ function build3DScatter(group, data, maxVal, maxHeight, wireframe, interactiveLi
   // Floor Perimeter Neon Line
   const minX = -7.5;
   const maxX = 7.5;
-  const minZ = -4.5;
-  const maxZ = 4.5;
+  const minZ = -1.8;
+  const maxZ = 2.0;
   const framePoints = [
     new THREE.Vector3(minX, 0.02, minZ),
     new THREE.Vector3(maxX, 0.02, minZ),
@@ -1635,17 +1923,58 @@ function build3DScatter(group, data, maxVal, maxHeight, wireframe, interactiveLi
     new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.8, linewidth: 2 })
   ));
 
+  // Floor center track line connecting drop puddles in one straight line
+  const floorTrack = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(minX, 0.015, 0.0),
+      new THREE.Vector3(maxX, 0.015, 0.0)
+    ]),
+    new THREE.LineDashedMaterial({
+      color: 0x38bdf8,
+      dashSize: 0.25,
+      gapSize: 0.15,
+      opacity: 0.45,
+      transparent: true
+    })
+  );
+  floorTrack.computeLineDistances();
+  group.add(floorTrack);
+
+  // Sleek connecting dashed trajectory line between points in one line
+  if (pts.length >= 2 && pts.length <= 40) {
+    const sortedPts = [...pts].sort((a, b) => a.x - b.x);
+    const lineCoords = sortedPts.map(p => {
+      const nRatioX = Math.max(0, Math.min(1, (p.x - minXVal) / spanX));
+      const nRatioY = Math.max(0, Math.min(1, (p.y - minYVal) / spanY));
+      return new THREE.Vector3(
+        minX + nRatioX * (maxX - minX),
+        Math.max(nRatioY * maxHeight, 0.45),
+        0.0
+      );
+    });
+    const connectGeo = new THREE.BufferGeometry().setFromPoints(lineCoords);
+    const connectMat = new THREE.LineDashedMaterial({
+      color: 0x38bdf8,
+      dashSize: 0.25,
+      gapSize: 0.15,
+      opacity: 0.45,
+      transparent: true
+    });
+    const connectLine = new THREE.Line(connectGeo, connectMat);
+    connectLine.computeLineDistances();
+    group.add(connectLine);
+  }
+
   pts.forEach((p, i) => {
     const rawX = p.x;
     const rawY = p.y;
     const normRatioX = Math.max(0, Math.min(1, (rawX - minXVal) / spanX));
     const normRatioY = Math.max(0, Math.min(1, (rawY - minYVal) / spanY));
 
-    // True spatial coordinates matching 2D chart layout exactly
+    // True spatial coordinates matching 2D chart layout exactly (all collinear along Z = 0)
     const posX = minX + normRatioX * (maxX - minX);
     const posY = Math.max(normRatioY * maxHeight, 0.45);
-    // Subtle z-stagger so overlapping points remain visible in 3D
-    const posZ = ((i % 7) - 3) * 0.7;
+    const posZ = 0.0;
 
     const radius = 0.45;
     const geom = new THREE.SphereGeometry(radius, 28, 28);
@@ -1673,8 +2002,14 @@ function build3DScatter(group, data, maxVal, maxHeight, wireframe, interactiveLi
     group.add(mesh);
     interactiveList.push(mesh);
 
-    // Floating pill value badge on prominent sample points
-    if (showLabels && (i % 6 === 0 || i < 4)) {
+    // Floating pill value badge: always show for all points up to 16, and always include last point
+    const shouldShowBadge = showLabels && (
+      pts.length <= 16 ||
+      i < 6 ||
+      i % Math.ceil(pts.length / 10) === 0 ||
+      i === pts.length - 1
+    );
+    if (shouldShowBadge) {
       const badge = createFloatingValueBadge(formatDataValue(rawY), colorHex);
       badge.position.set(posX, posY + radius + 0.65, posZ);
       group.add(badge);
@@ -1785,59 +2120,212 @@ function build3DScatter(group, data, maxVal, maxHeight, wireframe, interactiveLi
   }
 }
 
-/** 3D Pie & Donut Chart (Guaranteed seamless 360° closed circle, never cut off) */
-function build3DPieDonut(group, data, isDonut, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, showLabels = true, isDark = false) {
-  // Filter positive values and take top categories (up to 8), grouping tail into 'Other'
-  let slices = [...data].filter((d) => (parseFloat(d.val) || 0) > 0);
-  if (slices.length > 8) {
-    const top7 = slices.slice(0, 7);
-    const rest = slices.slice(7);
-    const otherVal = rest.reduce((acc, d) => acc + (parseFloat(d.val) || 0), 0);
-    slices = [...top7, { label: 'Other', val: otherVal }];
+/** 3D Pie & Donut Chart (Guaranteed seamless 360° closed circle, with visible data labels & total matching 2D) */
+function build3DPieDonut(group, data, isDonut, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, showLabels = true, isDark = false, chartData = null) {
+  // Helper: Prominent Slice Data Badge Sprite (Category + Value + Percentage)
+  const createPieSliceBadgeSprite = (categoryLabel, val, pct, colorHex) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = 3;
+    const w = 170;
+    const h = 75;
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    ctx.scale(scale, scale);
+
+    const cleanPct = String(pct ?? '').trim();
+    const displayVal = `${formatDataValue(val)} (${cleanPct.includes('%') ? cleanPct : cleanPct + '%'})`;
+    const cleanCat = String(categoryLabel ?? '');
+    const displayLabel = cleanCat.length > 12 ? cleanCat.slice(0, 10) + '…' : cleanCat;
+
+    const pad = 4;
+    const bw = w - pad * 2;
+    const bh = h - pad * 2;
+    const r = 14;
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(pad, pad, bw, bh, r);
+    } else {
+      ctx.rect(pad, pad, bw, bh);
+    }
+    ctx.fillStyle = isDark ? 'rgba(7, 13, 30, 0.92)' : 'rgba(255, 255, 255, 0.95)';
+    ctx.fill();
+
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = colorHex || '#38bdf8';
+    ctx.shadowColor = colorHex || '#38bdf8';
+    ctx.shadowBlur = 10;
+    ctx.stroke();
+
+    // Category Label (top line)
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '600 20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = colorHex || (isDark ? '#38bdf8' : '#0284c7');
+    ctx.fillText(displayLabel, w / 2, pad + 20);
+
+    // Value & Percentage (bottom line)
+    ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = isDark ? '#ffffff' : '#0f172a';
+    ctx.fillText(displayVal, w / 2, pad + 46);
+    ctx.restore();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(2.2, 0.98, 1);
+    return sprite;
+  };
+
+  // Helper: Donut Center Grand Total KPI Badge Sprite (matching 2D donut center)
+  const createDonutCenterTotalSprite = (totalVal) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = 3;
+    const w = 150;
+    const h = 76;
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    ctx.scale(scale, scale);
+
+    const pad = 4;
+    const bw = w - pad * 2;
+    const bh = h - pad * 2;
+    const r = 16;
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(pad, pad, bw, bh, r);
+    } else {
+      ctx.rect(pad, pad, bw, bh);
+    }
+    ctx.fillStyle = isDark ? 'rgba(10, 18, 40, 0.94)' : 'rgba(248, 250, 252, 0.96)';
+    ctx.fill();
+
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.shadowColor = '#38bdf8';
+    ctx.shadowBlur = 8;
+    ctx.stroke();
+
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 17px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
+    ctx.fillText('TOTAL', w / 2, pad + 20);
+
+    ctx.font = 'bold 26px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = isDark ? '#ffffff' : '#0f172a';
+    ctx.fillText(formatDataValue(totalVal), w / 2, pad + 48);
+    ctx.restore();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(2.3, 1.15, 1);
+    return sprite;
+  };
+
+  // 1. Check if backend metadata has exact pie_slices directly extracted from 2D Matplotlib
+  const hasExactSlices = Boolean(chartData?.pie_slices && chartData.pie_slices.length > 0);
+
+  let sliceItems = [];
+  let totalVal = 0;
+
+  if (hasExactSlices) {
+    sliceItems = chartData.pie_slices;
+    totalVal = chartData.total_val !== undefined ? chartData.total_val : sliceItems.reduce((acc, s) => acc + (parseFloat(s.val) || 0), 0);
+  } else {
+    // Fallback: aggregate from data with startangle = 140 deg to match 2D orientation
+    let rawSlices = [...data].filter((d) => (parseFloat(d.val) || 0) > 0);
+    if (rawSlices.length > 8) {
+      const top7 = rawSlices.slice(0, 7);
+      const rest = rawSlices.slice(7);
+      const otherVal = rest.reduce((acc, d) => acc + (parseFloat(d.val) || 0), 0);
+      rawSlices = [...top7, { label: 'Other', val: otherVal }];
+    }
+    totalVal = rawSlices.reduce((acc, d) => acc + (parseFloat(d.val) || 0), 0);
+    if (totalVal <= 0) return;
+
+    let currentDeg = 140; // match 2D startangle=140
+    sliceItems = rawSlices.map((d, idx) => {
+      const degSpan = ((parseFloat(d.val) || 0) / totalVal) * 360;
+      const theta1 = currentDeg;
+      const theta2 = currentDeg + degSpan;
+      currentDeg += degSpan;
+      const pctNum = ((parseFloat(d.val) || 0) / totalVal) * 100;
+      return {
+        label: d.label,
+        val: parseFloat(d.val) || 0,
+        pct_str: `${pctNum.toFixed(1)}%`,
+        theta1,
+        theta2,
+        color: paletteColors[idx % paletteColors.length]
+      };
+    });
   }
 
-  // Calculate total STRICTLY over the slices to be rendered so angles sum to EXACTLY 360° (2*PI)
-  const total = slices.reduce((acc, d) => acc + (parseFloat(d.val) || 0), 0);
-  if (total <= 0) return;
+  if (sliceItems.length === 0 || totalVal <= 0) return;
 
-  let currentAngle = 0;
   const radius = 4.8;
   const innerRadius = isDonut ? 2.6 : 0;
   const thickness = 1.3;
 
-  slices.forEach((d, i) => {
-    const isLast = i === slices.length - 1;
-    // Guarantee that the last slice closes the circle to exactly 2*PI, eliminating any cut-out gaps
-    const sliceAngle = isLast
-      ? Math.max(0.01, Math.PI * 2 - currentAngle)
-      : Math.max(0.01, ((parseFloat(d.val) || 0) / total) * Math.PI * 2);
+  sliceItems.forEach((slice, i) => {
+    const a1 = (slice.theta1 * Math.PI) / 180;
+    const a2 = (slice.theta2 * Math.PI) / 180;
+    const span = Math.abs(a2 - a1);
+    if (span <= 0.001) return;
 
-    const colorHex = paletteColors[i % paletteColors.length];
+    const colorHex = slice.color || paletteColors[i % paletteColors.length];
 
-    // Create 2D Shape for slice
+    // Create 2D Shape for slice matching exact angles
     const shape = new THREE.Shape();
     if (isDonut) {
       shape.moveTo(
-        Math.cos(currentAngle) * innerRadius,
-        Math.sin(currentAngle) * innerRadius
+        Math.cos(a1) * innerRadius,
+        Math.sin(a1) * innerRadius
       );
       shape.lineTo(
-        Math.cos(currentAngle) * radius,
-        Math.sin(currentAngle) * radius
+        Math.cos(a1) * radius,
+        Math.sin(a1) * radius
       );
-      shape.absarc(0, 0, radius, currentAngle, currentAngle + sliceAngle, false);
+      shape.absarc(0, 0, radius, a1, a2, false);
       shape.lineTo(
-        Math.cos(currentAngle + sliceAngle) * innerRadius,
-        Math.sin(currentAngle + sliceAngle) * innerRadius
+        Math.cos(a2) * innerRadius,
+        Math.sin(a2) * innerRadius
       );
-      shape.absarc(0, 0, innerRadius, currentAngle + sliceAngle, currentAngle, true);
+      shape.absarc(0, 0, innerRadius, a2, a1, true);
     } else {
       shape.moveTo(0, 0);
       shape.lineTo(
-        Math.cos(currentAngle) * radius,
-        Math.sin(currentAngle) * radius
+        Math.cos(a1) * radius,
+        Math.sin(a1) * radius
       );
-      shape.absarc(0, 0, radius, currentAngle, currentAngle + sliceAngle, false);
+      shape.absarc(0, 0, radius, a1, a2, false);
       shape.lineTo(0, 0);
     }
     shape.closePath();
@@ -1865,29 +2353,51 @@ function build3DPieDonut(group, data, isDonut, wireframe, interactiveList, palet
     mesh.castShadow = true;
     mesh.receiveShadow = true;
 
-    const pct = Math.round(((parseFloat(d.val) || 0) / total) * 100);
-    mesh.userData = { label: d.label, val: `${formatDataValue(d.val)} (${pct}%)` };
+    mesh.userData = {
+      label: slice.label,
+      val: `${formatDataValue(slice.val)} (${slice.pct_str})`
+    };
     group.add(mesh);
     interactiveList.push(mesh);
 
-    // Glued Flat Surface Label on top face of slice
-    if (showLabels && sliceAngle > 0.18) {
-      const midAngle = currentAngle + sliceAngle / 2;
+    // Prominent Data Label Badge (Category + Value + Exact % matching 2D chart)
+    if (showLabels) {
+      const midAngle = (a1 + a2) / 2;
       const midRadius = isDonut ? (innerRadius + radius) / 2 : radius * 0.65;
-      const labelX = Math.cos(midAngle) * midRadius;
-      const labelZ = -Math.sin(midAngle) * midRadius;
-      const labelMesh = createSurfaceLabelMesh(formatDataValue(d.val) + ` (${pct}%)`, d.label, 1.25, 1.25, isDark);
-      labelMesh.position.set(labelX, 1.8 + thickness + 0.015, labelZ);
-      group.add(labelMesh);
-    }
+      const badgeRadius = span < 0.40 ? (radius + 0.85) : midRadius;
+      const labelX = Math.cos(midAngle) * badgeRadius;
+      const labelZ = -Math.sin(midAngle) * badgeRadius;
 
-    currentAngle += sliceAngle;
+      const badgeSprite = createPieSliceBadgeSprite(slice.label, slice.val, slice.pct_str, colorHex);
+      badgeSprite.position.set(labelX, 1.8 + thickness + 0.45, labelZ);
+      group.add(badgeSprite);
+    }
   });
 
+  // Center KPI Grand Total Badge for Donut Chart (matching 2D donut chart center)
+  if (isDonut && showLabels) {
+    const centerTotalBadge = createDonutCenterTotalSprite(totalVal);
+    centerTotalBadge.position.set(0, 1.8 + thickness + 0.45, 0);
+    group.add(centerTotalBadge);
+  }
 }
 
-/** 3D Line & Ribbon Area Chart */
-function build3DLineArea(group, data, maxVal, maxHeight, isArea, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, accentColor = 0x013e37, showLabels = true, isDark = false) {
+/** 3D Line & Ribbon Area Chart with true X and Y Axes, Category Labels & Numeric Scales */
+function build3DLineArea(
+  group,
+  data,
+  maxVal,
+  maxHeight,
+  isArea,
+  wireframe,
+  interactiveList,
+  paletteColors = DEFAULT_PALETTE,
+  accentColor = 0x013e37,
+  showLabels = true,
+  isDark = false,
+  effXCol = 'Month',
+  effYCol = 'Sales'
+) {
   const count = data.length;
   const spacing = count <= 6 ? 2.3 : Math.max(14 / count, 1.4);
   const startX = -((count - 1) * spacing) / 2;
@@ -1898,12 +2408,39 @@ function build3DLineArea(group, data, maxVal, maxHeight, isArea, wireframe, inte
     ? paletteColors
     : CYBER_3D_PALETTE;
 
+  // Floor grid boundaries
+  const padX = spacing * 0.75;
+  const minX = startX - padX;
+  const maxX = (startX + (count - 1) * spacing) + padX;
+  const minZ = -1.6;
+  const maxZ = 1.9;
+
+  // 1. Floor Perimeter Frame Line (Glowing Cyber Grid Frame)
+  const framePoints = [
+    new THREE.Vector3(minX, 0.02, minZ),
+    new THREE.Vector3(maxX, 0.02, minZ),
+    new THREE.Vector3(maxX, 0.02, maxZ),
+    new THREE.Vector3(minX, 0.02, maxZ),
+    new THREE.Vector3(minX, 0.02, minZ)
+  ];
+  group.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(framePoints),
+    new THREE.LineBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.85, linewidth: 2 })
+  ));
+
+  const axisLineMat = new THREE.LineBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.85,
+    linewidth: 2
+  });
+
   data.forEach((d, i) => {
     const rawRatio = maxVal > 0 ? (d.val / maxVal) : 0.5;
     const height = Math.max(rawRatio * maxHeight, 0.6);
     const colorHex = colorsToUse[i % colorsToUse.length];
-    // Positioned at z = 0.4 so it floats prominently in front of the 2D backdrop card (at z = -2.4)
-    const pt = new THREE.Vector3(startX + i * spacing, height, 0.4);
+    const posX = startX + i * spacing;
+    const pt = new THREE.Vector3(posX, height, 0.4);
     points.push(pt);
 
     // Marker sphere with rich specular shine
@@ -1953,6 +2490,18 @@ function build3DLineArea(group, data, maxVal, maxHeight, isArea, wireframe, inte
     const puddle = new THREE.Mesh(puddleGeo, puddleMat);
     puddle.position.set(pt.x, 0.01, pt.z);
     group.add(puddle);
+
+    // 2. X-Axis Category Label beneath each point
+    const catSprite = createCategoryLabelSprite(d.label, isDark);
+    catSprite.position.set(posX, -0.42, maxZ + 0.28);
+    group.add(catSprite);
+
+    // Tick mark notch on front X-axis line
+    const tickGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(posX, 0.02, maxZ),
+      new THREE.Vector3(posX, 0.02, maxZ + 0.18)
+    ]);
+    group.add(new THREE.Line(tickGeo, axisLineMat));
   });
 
   // Smooth CatmullRom Curve 3D Tube
@@ -1970,193 +2519,875 @@ function build3DLineArea(group, data, maxVal, maxHeight, isArea, wireframe, inte
     const tube = new THREE.Mesh(tubeGeo, tubeMat);
     tube.castShadow = true;
     group.add(tube);
+
+    // Translucent Area Ribbon fill from curve down to floor if area chart
+    if (isArea) {
+      const areaGeom = new THREE.BufferGeometry();
+      const vertices = [];
+      const indices = [];
+      const sampleSteps = 60;
+      for (let s = 0; s <= sampleSteps; s++) {
+        const t = s / sampleSteps;
+        const topPt = curve.getPoint(t);
+        vertices.push(topPt.x, topPt.y, topPt.z);
+        vertices.push(topPt.x, 0.02, topPt.z);
+
+        if (s < sampleSteps) {
+          const i0 = s * 2;
+          const i1 = s * 2 + 1;
+          const i2 = (s + 1) * 2;
+          const i3 = (s + 1) * 2 + 1;
+          indices.push(i0, i1, i2);
+          indices.push(i2, i1, i3);
+          indices.push(i0, i2, i1);
+          indices.push(i2, i3, i1);
+        }
+      }
+      areaGeom.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+      areaGeom.setIndex(indices);
+      areaGeom.computeVertexNormals();
+
+      const areaMat = new THREE.MeshStandardMaterial({
+        color: colorsToUse[0] || 0x38bdf8,
+        transparent: true,
+        opacity: 0.28,
+        side: THREE.DoubleSide,
+        roughness: 0.3,
+        metalness: 0.2
+      });
+      const areaMesh = new THREE.Mesh(areaGeom, areaMat);
+      group.add(areaMesh);
+    }
   }
+
+  // 3. Horizontal X-Axis Line along the front
+  const xLineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(minX, 0.02, maxZ),
+    new THREE.Vector3(maxX, 0.02, maxZ)
+  ]);
+  group.add(new THREE.Line(xLineGeo, axisLineMat));
+
+  // 4. Centered X-Axis Title
+  const xTitle = String(effXCol || 'Month').trim();
+  const xTitleSprite = createAxisTitleSprite(xTitle, false);
+  xTitleSprite.position.set((minX + maxX) / 2, -1.05, maxZ + 0.85);
+  group.add(xTitleSprite);
+
+  // 5. Vertical Y-Axis (Line, Ticks, Value Labels & Title)
+  const yAxisX = minX - 0.7;
+  const yAxisHeight = maxHeight * 1.06;
+
+  // Vertical glowing Y-axis line
+  const yLineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(yAxisX, 0.02, maxZ),
+    new THREE.Vector3(yAxisX, yAxisHeight, maxZ)
+  ]);
+  group.add(new THREE.Line(yLineGeo, axisLineMat));
+
+  // Y-Axis Ticks & Values (matching scale 0 to maxVal)
+  const tickCount = 6;
+  const tickStep = maxVal / (tickCount - 1);
+  for (let t = 0; t < tickCount; t++) {
+    const tickVal = t * tickStep;
+    const tickY = Math.max((tickVal / maxVal) * maxHeight, 0.02);
+
+    // Tick Mark
+    const tickGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(yAxisX, tickY, maxZ),
+      new THREE.Vector3(yAxisX - 0.22, tickY, maxZ)
+    ]);
+    group.add(new THREE.Line(tickGeo, axisLineMat));
+
+    // Tick Value Label
+    if (showLabels) {
+      const formattedTick = formatDataValue(tickVal);
+      const tickSprite = createAxisTickLabelSprite(formattedTick);
+      tickSprite.position.set(yAxisX - 0.75, tickY, maxZ);
+      group.add(tickSprite);
+    }
+  }
+
+  // Rotated Y-Axis Title ("Sales" / Metric Name)
+  const yTitle = String(effYCol || 'Sales').trim();
+  const yTitleSprite = createAxisTitleSprite(yTitle, true);
+  yTitleSprite.position.set(yAxisX - 1.55, yAxisHeight / 2, maxZ);
+  group.add(yTitleSprite);
 }
 
-/** 3D Heatmap Topographic Elevation Grid */
-function build3DHeatmap(group, data, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, showLabels = true, isDark = false) {
-  const gridSize = 4;
-  const spacing = 1.8;
-  const offset = -((gridSize - 1) * spacing) / 2;
+/**
+ * 3D Physical Matrix Heatmap
+ * Renders an exact correlation matrix matching the 2D chart:
+ * - Flat, tactile beveled tile boxes (uniform height 0.35, NO tall vertical bars!)
+ * - Colormap-driven tile colors matching Seaborn/Matplotlib palette
+ * - Crisp correlation value decals (+1.00, +0.87, etc.) on top face of each box
+ * - Full X-Axis along the front edge with tick marks, column labels, and X-axis title
+ * - Full Y-Axis along the left edge with tick marks, row labels, and Y-axis title
+ * - Floating cyber base platform and neon perimeter line
+ * - Right-side 3D colorbar legend (-1.0 to +1.0)
+ */
+function build3DHeatmap(
+  group,
+  chartData,
+  allRows = [],
+  numCols = [],
+  wireframe = false,
+  interactiveList = [],
+  paletteColors = DEFAULT_PALETTE,
+  showLabels = true,
+  isDark = false
+) {
+  let columns = [];
+  let rows = [];
+  let matrix = [];
 
-  let idx = 0;
-  for (let x = 0; x < gridSize; x++) {
-    for (let z = 0; z < gridSize; z++) {
-      const d = data[idx % data.length];
-      idx++;
+  if (chartData?.matrix && chartData.matrix.length > 0) {
+    // 100% exact match from backend Python corr() computation
+    columns = chartData.columns || [];
+    rows = chartData.rows || [];
+    matrix = chartData.matrix || [];
+  } else {
+    // Client-side fallback: compute pairwise Pearson correlation from numeric columns
+    const activeCols = (numCols && numCols.length >= 2) ? numCols.slice(0, 6) : ['Sales', 'Profit'];
+    columns = [...activeCols];
+    rows = [...activeCols];
 
-      const height = 0.5 + ((idx * 7) % 6);
-      const colorHex = paletteColors[idx % paletteColors.length];
-
-      const geom = new THREE.BoxGeometry(1.4, height, 1.4);
-      const mat = new THREE.MeshStandardMaterial({
-        color: colorHex,
-        metalness: 0.3,
-        roughness: 0.4,
-        wireframe: wireframe
+    matrix = [];
+    rows.forEach((rName, rIdx) => {
+      columns.forEach((cName, cIdx) => {
+        if (rIdx === cIdx) {
+          matrix.push({ row: rName, col: cName, row_idx: rIdx, col_idx: cIdx, val: 1.0 });
+        } else {
+          const pairs = (allRows || [])
+            .map(r => [parseFloat(r[rName]), parseFloat(r[cName])])
+            .filter(([x, y]) => !isNaN(x) && !isNaN(y));
+          let corrVal = 0.5;
+          if (pairs.length > 1) {
+            const xs = pairs.map(p => p[0]);
+            const ys = pairs.map(p => p[1]);
+            const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+            const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+            const num = pairs.reduce((sum, [x, y]) => sum + (x - mx) * (y - my), 0);
+            const denX = Math.sqrt(xs.reduce((sum, x) => sum + (x - mx) ** 2, 0));
+            const denY = Math.sqrt(ys.reduce((sum, y) => sum + (y - my) ** 2, 0));
+            corrVal = (denX > 0 && denY > 0) ? num / (denX * denY) : 0;
+          }
+          matrix.push({ row: rName, col: cName, row_idx: rIdx, col_idx: cIdx, val: Math.round(corrVal * 100) / 100 });
+        }
       });
+    });
+  }
 
-      const mesh = new THREE.Mesh(geom, mat);
-      mesh.position.set(offset + x * spacing, height / 2, offset + z * spacing);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
+  const numC = Math.max(columns.length, 1);
+  const numR = Math.max(rows.length, 1);
 
-      mesh.userData = { label: `Cell (${x + 1}, ${z + 1}) - ${d.label}`, val: d.val };
-      group.add(mesh);
-      interactiveList.push(mesh);
+  // Layout geometry sizing
+  const maxGridDim = Math.max(numC, numR);
+  const spacing = maxGridDim <= 2 ? 4.4 : (maxGridDim <= 4 ? 3.0 : 2.2);
+  const tileSize = spacing * 0.90;
+  const tileHeight = 0.40; // Flat tactile box tile, NO tall bars!
+  const tileTopY = 0.15 + tileHeight + 0.06; // Actual top Y elevation of extruded beveled box
 
-      // Glued Flat Surface Label on top face of heatmap block
-      if (showLabels) {
-        const labelMesh = createSurfaceLabelMesh(d.val, `(${x + 1},${z + 1})`, 1.25, 1.25, isDark);
-        labelMesh.position.set(offset + x * spacing, height + 0.015, offset + z * spacing);
-        group.add(labelMesh);
+  const startX = -((numC - 1) * spacing) / 2;
+  const startZ = -((numR - 1) * spacing) / 2;
+
+  const minX = startX - tileSize / 2;
+  const maxX = (startX + (numC - 1) * spacing) + tileSize / 2;
+  const minZ = startZ - tileSize / 2;
+  const maxZ = (startZ + (numR - 1) * spacing) + tileSize / 2;
+
+  // --- Helper: Large & Ultra-Clear Heatmap Value Badge Sprite ---
+  const createHeatmapValSprite = (val, colorHex) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = 3;
+    const w = 160;
+    const h = 80;
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    ctx.scale(scale, scale);
+
+    const num = typeof val === 'number' ? val : parseFloat(val);
+    const formattedVal = isNaN(num) ? String(val) : (num >= 0 ? '+' : '') + num.toFixed(2);
+
+    const pad = 4;
+    const bw = w - pad * 2;
+    const bh = h - pad * 2;
+    const r = 16;
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(pad, pad, bw, bh, r);
+    } else {
+      ctx.rect(pad, pad, bw, bh);
+    }
+    // High-contrast frosted container
+    ctx.fillStyle = isDark ? 'rgba(7, 13, 30, 0.94)' : 'rgba(255, 255, 255, 0.96)';
+    ctx.fill();
+
+    // Vibrant accent border
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = colorHex || '#38bdf8';
+    ctx.shadowColor = colorHex || '#38bdf8';
+    ctx.shadowBlur = 12;
+    ctx.stroke();
+
+    // Big Bold Crisp Correlation Value
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 38px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = isDark ? '#ffffff' : '#051329';
+    ctx.fillText(formattedVal, w / 2, h / 2 + 1);
+    ctx.restore();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false, // Ensures it is NEVER clipped or occluded
+      depthWrite: false
+    });
+
+    const sprite = new THREE.Sprite(spriteMat);
+    const spriteW = Math.max(2.2, Math.min(tileSize * 0.72, 3.4));
+    const spriteH = spriteW * (h / w);
+    sprite.scale.set(spriteW, spriteH, 1);
+    return sprite;
+  };
+
+  // --- Helper: Large Axis Tick Label Sprite ---
+  const createLargeHeatmapAxisLabelSprite = (text) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = 3;
+    const w = 220;
+    const h = 72;
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    ctx.scale(scale, scale);
+
+    const cleanLabel = String(text ?? '').trim();
+    const displayLabel = cleanLabel.length > 14 ? cleanLabel.slice(0, 12) + '…' : cleanLabel;
+
+    const pad = 3;
+    const bw = w - pad * 2;
+    const bh = h - pad * 2;
+    const r = 12;
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(pad, pad, bw, bh, r);
+    } else {
+      ctx.rect(pad, pad, bw, bh);
+    }
+    ctx.fillStyle = isDark ? 'rgba(10, 18, 40, 0.90)' : 'rgba(241, 245, 249, 0.94)';
+    ctx.fill();
+
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = '#38bdf8';
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = isDark ? '#f1f5f9' : '#0f172a';
+    ctx.fillText(displayLabel, w / 2, h / 2 + 1);
+    ctx.restore();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(2.4, 0.78, 1);
+    return sprite;
+  };
+
+  // --- Helper: Large Axis Title Sprite (Horizontal & Upright, Zero Rotation) ---
+  const createLargeHeatmapAxisTitleSprite = (text) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = 3;
+    const w = 320;
+    const h = 60;
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    ctx.scale(scale, scale);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 26px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#38bdf8';
+    ctx.shadowColor = 'rgba(56, 189, 248, 0.6)';
+    ctx.shadowBlur = 8;
+    ctx.fillText(text, w / 2, h / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(w / 70, h / 70, 1);
+    return sprite;
+  };
+
+  // --- Helper: Large Colorbar Tick Sprite ---
+  const createLargeColorbarTickSprite = (text) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = 3;
+    const w = 120;
+    const h = 50;
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    ctx.scale(scale, scale);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = '#67e8f9';
+    ctx.fillText(text, w / 2, h / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.scale.set(1.9, 0.8, 1);
+    return sprite;
+  };
+
+  // 1. Floating Cyber Base Platform under the tiles
+  const platPadding = 0.7;
+  const platGeo = new THREE.BoxGeometry(
+    (maxX - minX) + platPadding * 2,
+    0.15,
+    (maxZ - minZ) + platPadding * 2
+  );
+  const platMat = new THREE.MeshStandardMaterial({
+    color: isDark ? 0x091224 : 0xe2e8f0,
+    metalness: 0.8,
+    roughness: 0.25
+  });
+  const platform = new THREE.Mesh(platGeo, platMat);
+  platform.position.set((minX + maxX) / 2, 0.075, (minZ + maxZ) / 2);
+  platform.receiveShadow = true;
+  group.add(platform);
+
+  // Glowing Outer Neon Perimeter
+  const framePoints = [
+    new THREE.Vector3(minX - platPadding, 0.16, minZ - platPadding),
+    new THREE.Vector3(maxX + platPadding, 0.16, minZ - platPadding),
+    new THREE.Vector3(maxX + platPadding, 0.16, maxZ + platPadding),
+    new THREE.Vector3(minX - platPadding, 0.16, maxZ + platPadding),
+    new THREE.Vector3(minX - platPadding, 0.16, minZ - platPadding)
+  ];
+  group.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(framePoints),
+    new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.85, linewidth: 2 })
+  ));
+
+  // Color Interpolation Helper (-1.0 to +1.0 mapped to coolwarm / active palette)
+  const getCellColor = (val) => {
+    const norm = Math.max(0, Math.min(1, (val - (-1.0)) / 2.0));
+    if (paletteColors && paletteColors.length >= 2 && paletteColors !== PALETTE_MAP.butter_green) {
+      const idx = norm * (paletteColors.length - 1);
+      const low = Math.floor(idx);
+      const high = Math.min(low + 1, paletteColors.length - 1);
+      const frac = idx - low;
+      const c1 = new THREE.Color(paletteColors[low]);
+      const c2 = new THREE.Color(paletteColors[high]);
+      c1.lerp(c2, frac);
+      return '#' + c1.getHexString();
+    }
+    // Standard coolwarm correlation colormap: Blue (-1.0) -> Neutral (0.0) -> Red (+1.0)
+    if (norm < 0.5) {
+      const cBlue = new THREE.Color(0x2563eb);
+      const cMid = new THREE.Color(isDark ? 0x334155 : 0xcbd5e1);
+      cBlue.lerp(cMid, norm * 2);
+      return '#' + cBlue.getHexString();
+    } else {
+      const cMid = new THREE.Color(isDark ? 0x334155 : 0xcbd5e1);
+      const cRed = new THREE.Color(0xe11d48);
+      cMid.lerp(cRed, (norm - 0.5) * 2);
+      return '#' + cMid.getHexString();
+    }
+  };
+
+  // 2. Render each Cell as a flat, tactile Beveled Heatmap Box Tile
+  matrix.forEach((cell) => {
+    const cIdx = cell.col_idx ?? columns.indexOf(cell.col);
+    const rIdx = cell.row_idx ?? rows.indexOf(cell.row);
+    if (cIdx < 0 || rIdx < 0) return;
+
+    const posX = startX + cIdx * spacing;
+    const posZ = startZ + rIdx * spacing;
+    const val = typeof cell.val === 'number' ? cell.val : parseFloat(cell.val) || 0;
+
+    const colorHex = getCellColor(val);
+
+    // Flat beveled box tile (uniform height, NO tall vertical bars!)
+    const geom = createBeveledBarGeometry(tileSize, tileHeight, tileSize, 0.06);
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: colorHex,
+      metalness: 0.15,
+      roughness: 0.22,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.1,
+      wireframe: wireframe
+    });
+
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.set(posX, 0.15, posZ);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+
+    mesh.userData = {
+      label: `${cell.row} × ${cell.col}`,
+      val: `Correlation: ${val >= 0 ? '+' : ''}${val.toFixed(2)}`
+    };
+
+    group.add(mesh);
+    interactiveList.push(mesh);
+
+    // 3. Prominent, Big, Crisp Correlation Value Badge (floating directly above each tile)
+    if (showLabels) {
+      const valSprite = createHeatmapValSprite(val, colorHex);
+      valSprite.position.set(posX, tileTopY + 0.35, posZ);
+      group.add(valSprite);
+    }
+  });
+
+  // 3. X-Axis (Horizontal axis along the front edge of the heatmap matrix)
+  const axisLineMat = new THREE.LineBasicMaterial({
+    color: 0x38bdf8,
+    transparent: true,
+    opacity: 0.85,
+    linewidth: 2.5
+  });
+
+  const xAxisZ = maxZ + platPadding + 0.35;
+  const xLineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(minX - platPadding, 0.16, xAxisZ),
+    new THREE.Vector3(maxX + platPadding, 0.16, xAxisZ)
+  ]);
+  group.add(new THREE.Line(xLineGeo, axisLineMat));
+
+  columns.forEach((colName, cIdx) => {
+    const posX = startX + cIdx * spacing;
+
+    // X-Axis tick notch extending forward
+    const tickGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(posX, 0.16, xAxisZ),
+      new THREE.Vector3(posX, 0.16, xAxisZ + 0.3)
+    ]);
+    group.add(new THREE.Line(tickGeo, axisLineMat));
+
+    // Large X-Axis Column Name label
+    const colSprite = createLargeHeatmapAxisLabelSprite(String(colName).trim());
+    colSprite.position.set(posX, 0.22, xAxisZ + 0.95);
+    group.add(colSprite);
+  });
+
+  // X-Axis Title Centered (Horizontal & Upright, Zero Rotation)
+  const xTitleSprite = createLargeHeatmapAxisTitleSprite('Variables (X-Axis)');
+  xTitleSprite.position.set((minX + maxX) / 2, 0.22, xAxisZ + 1.95);
+  group.add(xTitleSprite);
+
+  // 4. Y-Axis (Vertical / depth axis along the left edge of the heatmap matrix)
+  const yAxisX = minX - platPadding - 0.35;
+  const yLineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(yAxisX, 0.16, minZ - platPadding),
+    new THREE.Vector3(yAxisX, 0.16, maxZ + platPadding)
+  ]);
+  group.add(new THREE.Line(yLineGeo, axisLineMat));
+
+  rows.forEach((rowName, rIdx) => {
+    const posZ = startZ + rIdx * spacing;
+
+    // Y-Axis tick notch extending left
+    const tickGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(yAxisX, 0.16, posZ),
+      new THREE.Vector3(yAxisX - 0.3, 0.16, posZ)
+    ]);
+    group.add(new THREE.Line(tickGeo, axisLineMat));
+
+    // Large Y-Axis Row Name label
+    const rowSprite = createLargeHeatmapAxisLabelSprite(String(rowName).trim());
+    rowSprite.position.set(yAxisX - 1.55, 0.22, posZ);
+    group.add(rowSprite);
+  });
+
+  // Y-Axis Title (Horizontal & Upright, Zero Rotation)
+  const yTitleSprite = createLargeHeatmapAxisTitleSprite('Variables (Y-Axis)');
+  yTitleSprite.position.set(yAxisX - 2.2, 0.22, minZ - 0.7);
+  group.add(yTitleSprite);
+
+  // 5. Right-side 3D Colorbar Legend (matching 2D Heatmap colorbar)
+  const cbarX = maxX + platPadding + 1.4;
+  const cbarSteps = 16;
+  const cbarStepDepth = (maxZ - minZ) / cbarSteps;
+  for (let s = 0; s < cbarSteps; s++) {
+    const sRatio = 1.0 - (s / (cbarSteps - 1)); // Top is +1.0, bottom is -1.0
+    const sVal = -1.0 + sRatio * 2.0;
+    const sZ = minZ + s * cbarStepDepth + cbarStepDepth / 2;
+    const sColor = getCellColor(sVal);
+
+    const stepGeo = new THREE.BoxGeometry(0.4, 0.16, cbarStepDepth * 0.96);
+    const stepMat = new THREE.MeshBasicMaterial({ color: sColor });
+    const stepMesh = new THREE.Mesh(stepGeo, stepMat);
+    stepMesh.position.set(cbarX, 0.15, sZ);
+    group.add(stepMesh);
+  }
+
+  // Large Colorbar Ticks and Labels: +1.0, 0.0, -1.0
+  const cbarTicks = [
+    { val: '+1.0', z: minZ },
+    { val: ' 0.0', z: (minZ + maxZ) / 2 },
+    { val: '-1.0', z: maxZ }
+  ];
+  cbarTicks.forEach((tk) => {
+    const tickSprite = createLargeColorbarTickSprite(tk.val);
+    tickSprite.position.set(cbarX + 1.35, 0.22, tk.z);
+    group.add(tickSprite);
+  });
+
+  // Colorbar Title (Horizontal & Upright, Zero Rotation)
+  const cbarTitleSprite = createLargeHeatmapAxisTitleSprite('Correlation Scale');
+  cbarTitleSprite.position.set(cbarX + 1.4, 0.22, minZ - 0.7);
+  group.add(cbarTitleSprite);
+}
+
+/**
+ * Exact squarified treemap partition algorithm (Bruls, Huizing, van Wijk).
+ * Generates optimal aspect-ratio rectangles matching python's squarify library.
+ */
+function squarifyTreemapLayout(items, x, y, dx, dy) {
+  if (!items || items.length === 0) return [];
+  const total = items.reduce((acc, it) => acc + (parseFloat(it.val) || 0), 0);
+  if (total <= 0) return [];
+
+  const normItems = items
+    .map(it => ({ ...it, val: Math.max(0.001, parseFloat(it.val) || 0) }))
+    .sort((a, b) => b.val - a.val);
+
+  const totalArea = dx * dy;
+  const sizes = normItems.map(it => (it.val / total) * totalArea);
+
+  const worst = (row, w) => {
+    const s = row.reduce((a, b) => a + b, 0);
+    if (s === 0) return Infinity;
+    const s2 = s * s;
+    const w2 = w * w;
+    let max = 0;
+    for (const r of row) {
+      const val = Math.max((w2 * r) / s2, s2 / (w2 * r));
+      if (val > max) max = val;
+    }
+    return max;
+  };
+
+  const layoutRow = (row, rowItems, rx, ry, rdx, rdy, vertical) => {
+    const rowArea = row.reduce((a, b) => a + b, 0);
+    const rects = [];
+    if (vertical) {
+      const rowWidth = rdy > 0 ? rowArea / rdy : 0;
+      let currY = ry;
+      for (let i = 0; i < row.length; i++) {
+        const itemHeight = rowArea > 0 ? (row[i] / rowArea) * rdy : 0;
+        rects.push({
+          ...rowItems[i],
+          x: rx,
+          y: currY,
+          dx: rowWidth,
+          dy: itemHeight
+        });
+        currY += itemHeight;
+      }
+      return { rects, newX: rx + rowWidth, newY: ry, newDx: Math.max(0, rdx - rowWidth), newDy: rdy };
+    } else {
+      const rowHeight = rdx > 0 ? rowArea / rdx : 0;
+      let currX = rx;
+      for (let i = 0; i < row.length; i++) {
+        const itemWidth = rowArea > 0 ? (row[i] / rowArea) * rdx : 0;
+        rects.push({
+          ...rowItems[i],
+          x: currX,
+          y: ry,
+          dx: itemWidth,
+          dy: rowHeight
+        });
+        currX += itemWidth;
+      }
+      return { rects, newX: rx, newY: ry + rowHeight, newDx: rdx, newDy: Math.max(0, rdy - rowHeight) };
+    }
+  };
+
+  let currX = x, currY = y, currDx = dx, currDy = dy;
+  let currentRow = [];
+  let currentRowItems = [];
+  const allRects = [];
+
+  for (let i = 0; i < sizes.length; i++) {
+    const size = sizes[i];
+    const item = normItems[i];
+    const w = Math.min(currDx, currDy);
+
+    if (currentRow.length === 0) {
+      currentRow.push(size);
+      currentRowItems.push(item);
+    } else {
+      const currentWorst = worst(currentRow, w);
+      const nextWorst = worst([...currentRow, size], w);
+      if (nextWorst <= currentWorst) {
+        currentRow.push(size);
+        currentRowItems.push(item);
+      } else {
+        const vertical = currDx < currDy;
+        const res = layoutRow(currentRow, currentRowItems, currX, currY, currDx, currDy, vertical);
+        allRects.push(...res.rects);
+        currX = res.newX;
+        currY = res.newY;
+        currDx = res.newDx;
+        currDy = res.newDy;
+        currentRow = [size];
+        currentRowItems = [item];
       }
     }
   }
+
+  if (currentRow.length > 0) {
+    const vertical = currDx < currDy;
+    const res = layoutRow(currentRow, currentRowItems, currX, currY, currDx, currDy, vertical);
+    allRects.push(...res.rects);
+  }
+
+  return allRects;
 }
 
 /**
- * Computes 2D squarified / slice-and-dice treemap partition layout.
+ * 3D Physical Treemap (True 3D Squarified Tiled Mosaic - NO VARYING BARS!)
+ * Renders uniform-height tactile beveled slates/tiles fitted into a rectangular cyber tray,
+ * with exact proportional surface areas (Width × Depth) and crisp data badges matching 2D chart 100%.
  */
-function computeTreemapLayout(items, x0, z0, w, d) {
-  if (!items || items.length === 0) return [];
-  if (items.length === 1) {
-    return [{ ...items[0], x: x0 + w / 2, z: z0 + d / 2, w, d }];
-  }
-
-  const totalVal = items.reduce((acc, it) => acc + Math.max(parseFloat(it.val) || 1, 1), 0);
-
-  // Find optimal split point
-  let bestIdx = 1;
-  let bestDiff = Infinity;
-  let acc = 0;
-  for (let i = 0; i < items.length - 1; i++) {
-    acc += Math.max(parseFloat(items[i].val) || 1, 1);
-    const ratio = acc / totalVal;
-    const diff = Math.abs(ratio - 0.5);
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      bestIdx = i + 1;
-    }
-  }
-
-  const groupA = items.slice(0, bestIdx);
-  const groupB = items.slice(bestIdx);
-  const valA = groupA.reduce((acc, it) => acc + Math.max(parseFloat(it.val) || 1, 1), 0);
-  const ratioA = valA / totalVal;
-
-  if (w >= d) {
-    const wA = w * ratioA;
-    const wB = w - wA;
-    return [
-      ...computeTreemapLayout(groupA, x0, z0, wA, d),
-      ...computeTreemapLayout(groupB, x0 + wA, z0, wB, d)
-    ];
-  } else {
-    const dA = d * ratioA;
-    const dB = d - dA;
-    return [
-      ...computeTreemapLayout(groupA, x0, z0, w, dA),
-      ...computeTreemapLayout(groupB, x0, z0 + dA, w, dB)
-    ];
-  }
-}
-
-/**
- * 3D Physical Treemap
- * Renders hierarchical 3D physical blocks on an elevated cyber platform,
- * with proportional surface area, beveled chamfers, and glowing top decals.
- */
-function build3DTreemap(group, data, maxVal, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, showLabels = true, isDark = true) {
-  const totalW = 15.0;
-  const totalD = 9.5;
+function build3DTreemap(group, data, maxVal, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, showLabels = true, isDark = true, chartData = null) {
+  const totalW = 15.6;
+  const totalD = 10.4;
+  const tileHeight = 0.44; // Uniform physical 3D tile thickness - NOT BARS!
+  const tileTopY = 0.25 + tileHeight; // Top face elevation
+  const gap = 0.16; // Elegant physical seam between tiles
 
   const colorsToUse = (paletteColors && paletteColors.length && paletteColors !== PALETTE_MAP.butter_green)
     ? paletteColors
-    : ['#9333ea', '#ec4899', '#f59e0b', '#f97316', '#db2777', '#06b6d4', '#10b981', '#6366f1'];
+    : ['#013E37', '#FFEFB3', '#08ab9c', '#f47a34', '#fc6eae', '#ffbd29', '#146665'];
 
-  // Base platform on the floor
-  const platGeo = new THREE.BoxGeometry(totalW + 0.6, 0.25, totalD + 0.6);
+  // Base platform tray on the floor
+  const platPadding = 0.45;
+  const platGeo = new THREE.BoxGeometry(totalW + platPadding * 2, 0.25, totalD + platPadding * 2);
   const platMat = new THREE.MeshStandardMaterial({
-    color: 0x091224,
+    color: isDark ? 0x091224 : 0xe2e8f0,
     metalness: 0.85,
-    roughness: 0.2
+    roughness: 0.22
   });
   const platform = new THREE.Mesh(platGeo, platMat);
   platform.position.set(0, 0.125, 0);
   platform.receiveShadow = true;
   group.add(platform);
 
-  // Glowing perimeter border for the platform
+  // Glowing perimeter neon border for the platform
   const framePoints = [
-    new THREE.Vector3(-totalW / 2 - 0.3, 0.26, -totalD / 2 - 0.3),
-    new THREE.Vector3(totalW / 2 + 0.3, 0.26, -totalD / 2 - 0.3),
-    new THREE.Vector3(totalW / 2 + 0.3, 0.26, totalD / 2 + 0.3),
-    new THREE.Vector3(-totalW / 2 - 0.3, 0.26, totalD / 2 + 0.3),
-    new THREE.Vector3(-totalW / 2 - 0.3, 0.26, -totalD / 2 - 0.3)
+    new THREE.Vector3(-totalW / 2 - platPadding + 0.05, 0.26, -totalD / 2 - platPadding + 0.05),
+    new THREE.Vector3(totalW / 2 + platPadding - 0.05, 0.26, -totalD / 2 - platPadding + 0.05),
+    new THREE.Vector3(totalW / 2 + platPadding - 0.05, 0.26, totalD / 2 + platPadding - 0.05),
+    new THREE.Vector3(-totalW / 2 - platPadding + 0.05, 0.26, totalD / 2 + platPadding - 0.05),
+    new THREE.Vector3(-totalW / 2 - platPadding + 0.05, 0.26, -totalD / 2 - platPadding + 0.05)
   ];
   const frameLine = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(framePoints),
-    new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.9, linewidth: 2 })
+    new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.85, linewidth: 2 })
   );
   group.add(frameLine);
 
-  // Compute 2D Treemap bounding blocks
-  const blocks = computeTreemapLayout(data, 0, 0, totalW, totalD);
+  // Helper: Prominent Treemap Tile Badge Sprite (Category + Value + Percentage)
+  const createTreemapTileBadgeSprite = (categoryLabel, val, pct, colorHex, blockW, blockD) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = 3;
+    const w = 180;
+    const h = 76;
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    ctx.scale(scale, scale);
 
-  blocks.forEach((b, i) => {
-    const posX = b.x - totalW / 2;
-    const posZ = b.z - totalD / 2;
+    const cleanLabel = String(categoryLabel ?? '').trim();
+    const displayLabel = cleanLabel.length > 14 ? cleanLabel.slice(0, 12) + '…' : cleanLabel;
+    const displayVal = `${formatDataValue(val)} (${pct}%)`;
 
-    const gap = 0.18;
-    const blockW = Math.max(b.w - gap, 0.5);
-    const blockD = Math.max(b.d - gap, 0.5);
-    const rawRatio = maxVal > 0 ? (b.val / maxVal) : 0.5;
-    const blockH = Math.max(1.0 + rawRatio * 1.5, 0.8);
-    const colorHex = colorsToUse[i % colorsToUse.length];
+    const pad = 4;
+    const bw = w - pad * 2;
+    const bh = h - pad * 2;
+    const r = 14;
+    ctx.save();
+    ctx.beginPath();
+    if (ctx.roundRect) {
+      ctx.roundRect(pad, pad, bw, bh, r);
+    } else {
+      ctx.rect(pad, pad, bw, bh);
+    }
+    ctx.fillStyle = isDark ? 'rgba(7, 13, 30, 0.92)' : 'rgba(255, 255, 255, 0.95)';
+    ctx.fill();
 
-    // 3D Physical Block Geometry
-    const blockGeo = new THREE.BoxGeometry(blockW, blockH, blockD);
-    const blockMat = new THREE.MeshPhysicalMaterial({
-      color: colorHex,
-      metalness: 0.15,
-      roughness: 0.18,
-      clearcoat: 0.7,
-      clearcoatRoughness: 0.15,
-      reflectivity: 0.6,
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = colorHex || '#38bdf8';
+    ctx.shadowColor = colorHex || '#38bdf8';
+    ctx.shadowBlur = 10;
+    ctx.stroke();
+
+    // Category Label (top line)
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '600 21px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = colorHex || (isDark ? '#38bdf8' : '#0284c7');
+    ctx.fillText(displayLabel, w / 2, pad + 20);
+
+    // Value & Percentage (bottom line)
+    ctx.font = 'bold 24px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    ctx.fillStyle = isDark ? '#ffffff' : '#0f172a';
+    ctx.fillText(displayVal, w / 2, pad + 47);
+    ctx.restore();
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.needsUpdate = true;
+
+    const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const sprite = new THREE.Sprite(spriteMat);
+    // Scale badge to fit comfortably on the tile without overwhelming small tiles
+    const maxW = Math.max(1.6, Math.min(blockW * 0.88, 3.2));
+    const maxH = maxW * (h / w);
+    sprite.scale.set(maxW, maxH, 1);
+    return sprite;
+  };
+
+  // Determine rectangles: prioritize exact 2D squarify rectangles from backend
+  let blocks = [];
+  const rawTotal = (data || []).reduce((acc, d) => acc + (parseFloat(d.val) || 0), 0) || 1;
+
+  if (chartData?.treemap_rects && chartData.treemap_rects.length > 0) {
+    // 100% exact match from backend python squarify
+    const totalBackend = chartData.treemap_rects.reduce((acc, r) => acc + (parseFloat(r.val) || 0), 0) || 1;
+    blocks = chartData.treemap_rects.map((r, i) => {
+      const rawW = (r.dx / 100) * totalW;
+      const rawD = (r.dy / 100) * totalD;
+      const blockW = Math.max(0.4, rawW - gap);
+      const blockD = Math.max(0.4, rawD - gap);
+      const posX = -totalW / 2 + (r.x / 100) * totalW + rawW / 2;
+      const posZ = -totalD / 2 + (r.y / 100) * totalD + rawD / 2;
+      const val = parseFloat(r.val) || 0;
+      const pct = Math.round((val / totalBackend) * 100);
+      const colorHex = r.color || colorsToUse[i % colorsToUse.length];
+      return {
+        label: r.label,
+        val,
+        pct,
+        colorHex,
+        posX,
+        posZ,
+        blockW,
+        blockD
+      };
+    });
+  } else {
+    // Client-side exact squarify layout fallback
+    const computed = squarifyTreemapLayout(data, 0, 0, totalW, totalD);
+    blocks = computed.map((b, i) => {
+      const blockW = Math.max(0.4, b.dx - gap);
+      const blockD = Math.max(0.4, b.dy - gap);
+      const posX = -totalW / 2 + b.x + b.dx / 2;
+      const posZ = -totalD / 2 + b.y + b.dy / 2;
+      const val = parseFloat(b.val) || 0;
+      const pct = Math.round((val / rawTotal) * 100);
+      const colorHex = colorsToUse[i % colorsToUse.length];
+      return {
+        label: b.label,
+        val,
+        pct,
+        colorHex,
+        posX,
+        posZ,
+        blockW,
+        blockD
+      };
+    });
+  }
+
+  // Render each block as a sleek, physical beveled mosaic slate/tile (UNIFORM HEIGHT - NOT BARS!)
+  blocks.forEach((b) => {
+    // 3D Physical Mosaic Tile with beveled edges (tactile, uniform height 0.44)
+    const geom = createBeveledBarGeometry(b.blockW, tileHeight, b.blockD, 0.05);
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: b.colorHex,
+      metalness: 0.18,
+      roughness: 0.22,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.12,
+      reflectivity: 0.65,
       wireframe: wireframe
     });
 
-    const mesh = new THREE.Mesh(blockGeo, blockMat);
-    mesh.position.set(posX, 0.25 + blockH / 2, posZ);
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.set(b.posX, 0.25, b.posZ);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
 
-    // Top surface label decal
-    let labelMesh = null;
-    if (showLabels) {
-      labelMesh = createSurfaceLabelMesh(b.val, b.label, blockW * 0.88, blockD * 0.88, isDark, colorHex);
-      labelMesh.position.set(posX, 0.25 + blockH + 0.015, posZ);
-      group.add(labelMesh);
-    }
-
-    // Floating value badge above the center of the block
-    if (showLabels) {
-      const badge = createFloatingValueBadge(b.val, colorHex);
-      badge.position.set(posX, 0.25 + blockH + 0.65, posZ);
-      group.add(badge);
-    }
-
     mesh.userData = {
       label: b.label,
-      val: formatDataValue(b.val),
-      origScaleY: blockH,
-      baseHeight: 1,
-      labelMesh: labelMesh
+      val: `${formatDataValue(b.val)} (${b.pct}%)`
     };
 
     group.add(mesh);
     interactiveList.push(mesh);
+
+    // Prominent floating badge directly above the tile center
+    if (showLabels) {
+      const badge = createTreemapTileBadgeSprite(b.label, b.val, b.pct, b.colorHex, b.blockW, b.blockD);
+      badge.position.set(b.posX, tileTopY + 0.35, b.posZ);
+      group.add(badge);
+    }
   });
 }
 
@@ -2185,10 +3416,10 @@ function build3DHistogram(group, allRows, effXCol, effYCol, maxVal, maxHeight, w
 
     const minV = Math.min(...rawVals);
     const maxV = Math.max(...rawVals);
-    const binCount = 8;
-    const binSpan = (maxV - minV) / binCount || 1;
+    const defaultBinCount = 8;
+    const binSpan = (maxV - minV) / defaultBinCount || 1;
 
-    bins = Array.from({ length: binCount }, (_, i) => ({
+    bins = Array.from({ length: defaultBinCount }, (_, i) => ({
       min: minV + i * binSpan,
       max: minV + (i + 1) * binSpan,
       count: 0
@@ -2196,12 +3427,13 @@ function build3DHistogram(group, allRows, effXCol, effYCol, maxVal, maxHeight, w
 
     rawVals.forEach(v => {
       let idx = Math.floor((v - minV) / binSpan);
-      if (idx >= binCount) idx = binCount - 1;
+      if (idx >= defaultBinCount) idx = defaultBinCount - 1;
       if (idx < 0) idx = 0;
       bins[idx].count++;
     });
   }
 
+  const binCount = Math.max(bins.length, 1);
   const maxCount = Math.max(...bins.map(b => b.count), 1);
   const totalW = 14.0;
   const binW = totalW / binCount;
@@ -2225,68 +3457,97 @@ function build3DHistogram(group, allRows, effXCol, effYCol, maxVal, maxHeight, w
     new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.85, linewidth: 2 })
   ));
 
-  const kdePoints = [];
-
   bins.forEach((b, i) => {
-    const ratio = b.count / maxCount;
-    const h = Math.max(ratio * maxHeight, 0.45);
     const posX = startX + i * binW;
     const colorHex = colorsToUse[i % colorsToUse.length];
+    const binLabel = `${formatDataValue(b.min)} - ${formatDataValue(b.max)}`;
 
-    // Contiguous Beveled Prism Geometry
-    const geom = createBeveledBarGeometry(binW * 0.94, h, barDepth, 0.05);
-    const mat = new THREE.MeshPhysicalMaterial({
-      color: colorHex,
-      metalness: 0.18,
-      roughness: 0.18,
-      clearcoat: 0.75,
-      clearcoatRoughness: 0.12,
-      wireframe: wireframe
-    });
+    if (b.count > 0) {
+      const ratio = b.count / maxCount;
+      const h = Math.max(ratio * maxHeight, 0.45);
 
-    const mesh = new THREE.Mesh(geom, mat);
-    mesh.position.set(posX, 0, 0);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+      // Contiguous Beveled Prism Geometry
+      const geom = createBeveledBarGeometry(binW * 0.94, h, barDepth, 0.05);
+      const mat = new THREE.MeshPhysicalMaterial({
+        color: colorHex,
+        metalness: 0.18,
+        roughness: 0.18,
+        clearcoat: 0.75,
+        clearcoatRoughness: 0.12,
+        wireframe: wireframe
+      });
 
-    // Floor glow puddle
-    const puddle = new THREE.Mesh(
-      new THREE.BoxGeometry(binW * 0.9, 0.02, barDepth * 0.9),
-      new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.28 })
-    );
-    puddle.position.set(posX, 0.01, 0);
-    group.add(puddle);
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.set(posX, 0, 0);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
 
-    // Floating Frequency Badge
-    let badge = null;
-    if (showLabels && b.count > 0) {
-      badge = createFloatingValueBadge(b.count, colorHex);
-      badge.position.set(posX, h + 0.7, 0);
-      group.add(badge);
+      // Floor glow puddle
+      const puddle = new THREE.Mesh(
+        new THREE.BoxGeometry(binW * 0.9, 0.02, barDepth * 0.9),
+        new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.28 })
+      );
+      puddle.position.set(posX, 0.01, 0);
+      group.add(puddle);
+
+      // Floating Frequency Badge (Exact count matching 2D bar_label)
+      let badge = null;
+      if (showLabels) {
+        badge = createFloatingValueBadge(b.count, colorHex);
+        badge.position.set(posX, h + 0.7, 0);
+        group.add(badge);
+      }
+
+      mesh.userData = {
+        label: `Bin: ${binLabel}`,
+        val: `Count: ${b.count}`,
+        isBeveledBar: true,
+        barHeight: h,
+        badge: badge
+      };
+
+      group.add(mesh);
+      interactiveList.push(mesh);
+    } else {
+      // Empty zero-count bin: subtle floor slot indicator matching 2D flat line
+      const slot = new THREE.Mesh(
+        new THREE.BoxGeometry(binW * 0.9, 0.01, barDepth * 0.9),
+        new THREE.MeshBasicMaterial({ color: 0x334155, transparent: true, opacity: 0.2 })
+      );
+      slot.position.set(posX, 0.005, 0);
+      group.add(slot);
     }
 
     // Bin Range Label below
-    const binLabel = `${formatDataValue(b.min)} - ${formatDataValue(b.max)}`;
     const catSprite = createCategoryLabelSprite(binLabel, isDark);
     catSprite.position.set(posX, -0.42, barDepth / 2 + 0.35);
     group.add(catSprite);
-
-    mesh.userData = {
-      label: `Bin: ${binLabel}`,
-      val: `Count: ${b.count}`,
-      isBeveledBar: true,
-      barHeight: h,
-      badge: badge
-    };
-
-    group.add(mesh);
-    interactiveList.push(mesh);
-
-    // Collect point for KDE line
-    kdePoints.push(new THREE.Vector3(posX, h + 0.15, barDepth / 2 + 0.1));
   });
 
-  // Smooth 3D KDE Ribbon / Tube across top of histogram
+  // Smooth 3D KDE Ribbon / Tube: 100% matched to 2D Seaborn KDE mathematical curve
+  let kdePoints = [];
+  if (chartData?.kde && chartData.kde.length >= 3) {
+    const minX = bins[0]?.min ?? (chartData.min_x || 0);
+    const maxX = bins[bins.length - 1]?.max ?? (chartData.max_x || 1);
+    const spanX = maxX - minX || 1;
+    const maxKdeY = Math.max(...chartData.kde.map(k => k.y), 0.001);
+
+    kdePoints = chartData.kde.map(pt => {
+      const normX = Math.max(0, Math.min(1, (pt.x - minX) / spanX));
+      const posX = -totalW / 2 + normX * totalW;
+      const normY = pt.y / maxKdeY;
+      const posY = Math.max(normY * maxHeight, 0.05);
+      return new THREE.Vector3(posX, posY, barDepth / 2 + 0.1);
+    });
+  } else {
+    kdePoints = bins.map((b, i) => {
+      const ratio = b.count / maxCount;
+      const h = ratio > 0 ? Math.max(ratio * maxHeight, 0.45) : 0.05;
+      const posX = startX + i * binW;
+      return new THREE.Vector3(posX, h + 0.15, barDepth / 2 + 0.1);
+    });
+  }
+
   if (kdePoints.length >= 3) {
     const curve = new THREE.CatmullRomCurve3(kdePoints);
     const tubeGeo = new THREE.TubeGeometry(curve, 64, 0.14, 12, false);
@@ -2303,6 +3564,42 @@ function build3DHistogram(group, allRows, effXCol, effYCol, maxVal, maxHeight, w
     kdeMesh.castShadow = true;
     group.add(kdeMesh);
   }
+
+  // Centered X-Axis Title
+  const xTitle = String(effXCol || 'Value').trim();
+  const xTitleSprite = createAxisTitleSprite(xTitle, false);
+  xTitleSprite.position.set(0, -1.05, barDepth / 2 + 0.85);
+  group.add(xTitleSprite);
+
+  // Vertical Y-Axis (Frequency / Count)
+  const yAxisX = -totalW / 2 - 0.75;
+  const yAxisHeight = maxHeight * 1.06;
+  const yAxisZ = barDepth / 2 + 0.4;
+  const yLineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(yAxisX, 0.02, yAxisZ),
+    new THREE.Vector3(yAxisX, yAxisHeight, yAxisZ)
+  ]);
+  const yLineMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.85, linewidth: 2 });
+  group.add(new THREE.Line(yLineGeo, yLineMat));
+
+  const tickCount = 5;
+  for (let t = 0; t < tickCount; t++) {
+    const tickVal = Math.round((t / (tickCount - 1)) * maxCount);
+    const tickY = Math.max((tickVal / maxCount) * maxHeight, 0.02);
+    const tickGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(yAxisX, tickY, yAxisZ),
+      new THREE.Vector3(yAxisX - 0.22, tickY, yAxisZ)
+    ]);
+    group.add(new THREE.Line(tickGeo, yLineMat));
+    if (showLabels) {
+      const tickSprite = createAxisTickLabelSprite(String(tickVal));
+      tickSprite.position.set(yAxisX - 0.72, tickY, yAxisZ);
+      group.add(tickSprite);
+    }
+  }
+  const yTitleSprite = createAxisTitleSprite('Frequency', true);
+  yTitleSprite.position.set(yAxisX - 1.5, yAxisHeight / 2, yAxisZ);
+  group.add(yTitleSprite);
 }
 
 /**
@@ -2312,53 +3609,86 @@ function build3DHistogram(group, allRows, effXCol, effYCol, maxVal, maxHeight, w
  * 3D physical floating cuboid interquartile range (IQR Q1 to Q3), glowing median notch slab,
  * slender metallic vertical whiskers with end caps, and floating outlier spheres.
  */
-function build3DBoxPlot(group, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, hasBackdrop) {
-  // Group rows by categorical column (effXCol) or single group
-  const groups = {};
-  const isCategorical = allRows.some(r => typeof r[effXCol] === 'string' && isNaN(parseFloat(r[effXCol])));
-
-  if (isCategorical) {
-    allRows.forEach(r => {
-      const cat = String(r[effXCol] || 'Other');
-      const val = parseFloat(r[effYCol]);
-      if (!isNaN(val)) {
-        if (!groups[cat]) groups[cat] = [];
-        groups[cat].push(val);
-      }
-    });
-  } else {
-    // Single or numeric split into 4 categories
-    const vals = allRows.map(r => parseFloat(r[effYCol] ?? r[effXCol])).filter(v => !isNaN(v));
-    if (vals.length > 0) {
-      groups['Overall'] = vals;
-    }
-  }
-
-  const entries = Object.entries(groups).slice(0, 6);
-  if (entries.length === 0) {
-    entries.push(
-      ['Group A', [15, 22, 28, 35, 42, 48, 55]],
-      ['Group B', [25, 32, 40, 48, 58, 65, 78]],
-      ['Group C', [10, 18, 25, 30, 36, 42, 50]]
-    );
-  }
-
-  // Find global min and max for consistent scale
+function build3DBoxPlot(group, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, hasBackdrop, chartData = null) {
+  let boxEntries = [];
   let globalMin = Infinity;
   let globalMax = -Infinity;
-  entries.forEach(([_, vals]) => {
-    vals.forEach(v => {
-      if (v < globalMin) globalMin = v;
-      if (v > globalMax) globalMax = v;
+
+  if (chartData?.boxes && chartData.boxes.length > 0) {
+    boxEntries = chartData.boxes.map(b => ({
+      catName: String(b.category),
+      minVal: Number(b.min),
+      q1: Number(b.q1),
+      median: Number(b.median),
+      q3: Number(b.q3),
+      maxValReal: Number(b.max),
+      lowerFence: Number(b.lower_fence),
+      upperFence: Number(b.upper_fence),
+      outliers: Array.isArray(b.outliers) ? b.outliers.map(Number) : []
+    }));
+
+    boxEntries.forEach(b => {
+      const mn = Math.min(b.minVal, b.lowerFence);
+      const mx = Math.max(b.maxValReal, b.upperFence);
+      if (mn < globalMin) globalMin = mn;
+      if (mx > globalMax) globalMax = mx;
     });
-  });
-  if (globalMin >= globalMax) {
+  } else {
+    // Group rows by categorical column (effXCol) or single group
+    const groups = {};
+    const isCategorical = allRows.some(r => typeof r[effXCol] === 'string' && isNaN(parseFloat(r[effXCol])));
+
+    if (isCategorical) {
+      allRows.forEach(r => {
+        const cat = String(r[effXCol] || 'Other');
+        const val = parseFloat(r[effYCol]);
+        if (!isNaN(val)) {
+          if (!groups[cat]) groups[cat] = [];
+          groups[cat].push(val);
+        }
+      });
+    } else {
+      const vals = allRows.map(r => parseFloat(r[effYCol] ?? r[effXCol])).filter(v => !isNaN(v));
+      if (vals.length > 0) {
+        groups['Overall'] = vals;
+      }
+    }
+
+    const rawEntries = Object.entries(groups).slice(0, 6);
+    if (rawEntries.length === 0) {
+      rawEntries.push(
+        ['Group A', [15, 22, 28, 35, 42, 48, 55]],
+        ['Group B', [25, 32, 40, 48, 58, 65, 78]],
+        ['Group C', [10, 18, 25, 30, 36, 42, 50]]
+      );
+    }
+
+    rawEntries.forEach(([catName, vals]) => {
+      const sorted = [...vals].sort((a, b) => a - b);
+      const n = sorted.length;
+      const minVal = sorted[0];
+      const maxValReal = sorted[n - 1];
+      const q1 = sorted[Math.floor(n * 0.25)];
+      const median = sorted[Math.floor(n * 0.5)];
+      const q3 = sorted[Math.floor(n * 0.75)];
+      const iqr = q3 - q1;
+      const lowerFence = Math.max(minVal, q1 - 1.5 * iqr);
+      const upperFence = Math.min(maxValReal, q3 + 1.5 * iqr);
+      const outliers = sorted.filter(v => v < lowerFence || v > upperFence);
+
+      boxEntries.push({ catName, minVal, q1, median, q3, maxValReal, lowerFence, upperFence, outliers });
+      if (minVal < globalMin) globalMin = minVal;
+      if (maxValReal > globalMax) globalMax = maxValReal;
+    });
+  }
+
+  if (globalMin >= globalMax || !isFinite(globalMin) || !isFinite(globalMax)) {
     globalMin = 0;
     globalMax = 100;
   }
   const globalSpan = globalMax - globalMin || 1;
 
-  const count = entries.length;
+  const count = boxEntries.length;
   const spacing = count <= 3 ? 3.6 : Math.max(14 / count, 2.2);
   const boxW = Math.min(spacing * 0.55, 1.6);
   const boxD = boxW;
@@ -2368,19 +3698,8 @@ function build3DBoxPlot(group, allRows, effXCol, effYCol, maxVal, maxHeight, wir
     ? paletteColors
     : CYBER_3D_PALETTE;
 
-  entries.forEach(([catName, vals], i) => {
-    const sorted = [...vals].sort((a, b) => a - b);
-    const n = sorted.length;
-    const minVal = sorted[0];
-    const maxValReal = sorted[n - 1];
-    const q1 = sorted[Math.floor(n * 0.25)];
-    const median = sorted[Math.floor(n * 0.5)];
-    const q3 = sorted[Math.floor(n * 0.75)];
-    const iqr = q3 - q1;
-    const lowerFence = Math.max(minVal, q1 - 1.5 * iqr);
-    const upperFence = Math.min(maxValReal, q3 + 1.5 * iqr);
-    const outliers = sorted.filter(v => v < lowerFence || v > upperFence);
-
+  boxEntries.forEach((box, i) => {
+    const { catName, q1, median, q3, lowerFence, upperFence, outliers } = box;
     const normY = v => Math.max(((v - globalMin) / globalSpan) * maxHeight, 0.4);
     const yMin = normY(lowerFence);
     const yQ1 = normY(q1);
@@ -2496,42 +3815,72 @@ function build3DBoxPlot(group, allRows, effXCol, effYCol, maxVal, maxHeight, wir
  * Smooth sculpted translucent 3D violin body with kernel density profile,
  * embedded miniature 3D box plot core, glowing median sphere, and category badges.
  */
-function build3DViolin(group, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, hasBackdrop) {
-  // Group rows by categorical column or fallback
-  const groups = {};
-  allRows.forEach(r => {
-    const cat = String(r[effXCol] || 'Other');
-    const val = parseFloat(r[effYCol]);
-    if (!isNaN(val)) {
-      if (!groups[cat]) groups[cat] = [];
-      groups[cat].push(val);
-    }
-  });
-
-  const entries = Object.entries(groups).slice(0, 5);
-  if (entries.length === 0) {
-    entries.push(
-      ['Series A', [10, 15, 22, 28, 32, 35, 40, 48, 55, 62]],
-      ['Series B', [20, 25, 34, 42, 45, 50, 58, 68, 75, 82]],
-      ['Series C', [12, 18, 24, 30, 36, 42, 48, 52, 58, 65]]
-    );
-  }
-
+function build3DViolin(group, allRows, effXCol, effYCol, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, hasBackdrop, chartData = null) {
+  let vEntries = [];
   let globalMin = Infinity;
   let globalMax = -Infinity;
-  entries.forEach(([_, vals]) => {
-    vals.forEach(v => {
-      if (v < globalMin) globalMin = v;
-      if (v > globalMax) globalMax = v;
+
+  if (chartData?.violins && chartData.violins.length > 0) {
+    vEntries = chartData.violins.map(v => ({
+      catName: String(v.category),
+      minVal: Number(v.min),
+      maxValReal: Number(v.max),
+      q1: Number(v.q1),
+      median: Number(v.median),
+      q3: Number(v.q3),
+      mean: Number(v.mean),
+      std: Number(v.std) || 1.0
+    }));
+
+    vEntries.forEach(v => {
+      if (v.minVal < globalMin) globalMin = v.minVal;
+      if (v.maxValReal > globalMax) globalMax = v.maxValReal;
     });
-  });
-  if (globalMin >= globalMax) {
+  } else {
+    // Group rows by categorical column or fallback
+    const groups = {};
+    allRows.forEach(r => {
+      const cat = String(r[effXCol] || 'Other');
+      const val = parseFloat(r[effYCol]);
+      if (!isNaN(val)) {
+        if (!groups[cat]) groups[cat] = [];
+        groups[cat].push(val);
+      }
+    });
+
+    const entries = Object.entries(groups).slice(0, 5);
+    if (entries.length === 0) {
+      entries.push(
+        ['Series A', [10, 15, 22, 28, 32, 35, 40, 48, 55, 62]],
+        ['Series B', [20, 25, 34, 42, 45, 50, 58, 68, 75, 82]],
+        ['Series C', [12, 18, 24, 30, 36, 42, 48, 52, 58, 65]]
+      );
+    }
+
+    entries.forEach(([catName, vals]) => {
+      const sorted = [...vals].sort((a, b) => a - b);
+      const n = sorted.length;
+      const median = sorted[Math.floor(n * 0.5)];
+      const q1 = sorted[Math.floor(n * 0.25)];
+      const q3 = sorted[Math.floor(n * 0.75)];
+      const mean = vals.reduce((a, b) => a + b, 0) / n;
+      const std = Math.sqrt(vals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n) || 10;
+      const minVal = sorted[0];
+      const maxValReal = sorted[n - 1];
+
+      vEntries.push({ catName, minVal, maxValReal, q1, median, q3, mean, std });
+      if (minVal < globalMin) globalMin = minVal;
+      if (maxValReal > globalMax) globalMax = maxValReal;
+    });
+  }
+
+  if (globalMin >= globalMax || !isFinite(globalMin) || !isFinite(globalMax)) {
     globalMin = 0;
     globalMax = 100;
   }
   const globalSpan = globalMax - globalMin || 1;
 
-  const count = entries.length;
+  const count = vEntries.length;
   const spacing = count <= 3 ? 3.8 : Math.max(14 / count, 2.4);
   const startX = -((count - 1) * spacing) / 2;
 
@@ -2539,26 +3888,8 @@ function build3DViolin(group, allRows, effXCol, effYCol, maxVal, maxHeight, wire
     ? paletteColors
     : CYBER_3D_PALETTE;
 
-  entries.forEach(([catName, vals], i) => {
-    const sorted = [...vals].sort((a, b) => a - b);
-    const n = sorted.length;
-    const median = sorted[Math.floor(n * 0.5)];
-    const q1 = sorted[Math.floor(n * 0.25)];
-    const q3 = sorted[Math.floor(n * 0.75)];
-
-    const posX = startX + i * spacing;
-    const colorHex = colorsToUse[i % colorsToUse.length];
-
-    // Compute KDE profile across 16 vertical slices
-    const slices = 16;
-    const points = [];
-    const minNormY = 0.5;
-    const maxNormY = maxHeight;
-    const stepY = (maxNormY - minNormY) / slices;
-
-    // Estimate density at each slice
-    const mean = vals.reduce((a, b) => a + b, 0) / n;
-    const std = Math.sqrt(vals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n) || 10;
+  vEntries.forEach((vEntry, i) => {
+    const { catName, median, q1, q3, mean, std } = vEntry;
 
     for (let s = 0; s <= slices; s++) {
       const curY = minNormY + s * stepY;
@@ -2638,22 +3969,21 @@ function build3DViolin(group, allRows, effXCol, effYCol, maxVal, maxHeight, wire
  * 3D floating stepped columns with floating baselines: positive increments (green/teal),
  * negative decrements (red/coral), anchored totals, and neon connector bridge lines.
  */
-function build3DWaterfall(group, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol) {
+function build3DWaterfall(group, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, chartData = null) {
   const count = dataPoints.length;
   const spacing = count <= 5 ? 2.4 : Math.max(14 / count, 1.5);
   const colW = Math.min(spacing * 0.65, 1.5);
   const colD = colW;
   const startX = -((count - 1) * spacing) / 2;
 
-  // Calculate cumulative baseline
+  // Calculate cumulative baseline from exact 2D data values
   let cumulative = 0;
   const steps = [];
   dataPoints.forEach((d, i) => {
     const isFirst = i === 0;
     const isLast = i === count - 1;
     const rawVal = parseFloat(d.val) || 0;
-    // Alternate positive/negative if all positive in sample
-    const val = (i % 3 === 2 && !isFirst && !isLast) ? -Math.abs(rawVal * 0.45) : rawVal;
+    const val = rawVal;
     const startY = cumulative;
     cumulative += val;
     steps.push({
@@ -2754,11 +4084,11 @@ function build3DWaterfall(group, dataPoints, maxVal, maxHeight, wireframe, inter
  * Stacked descending 3D tapered frustums / truncated cones with glowing connector rings,
  * conversion percentage decals, and sunset/cyber gradient materials.
  */
-function build3DFunnel(group, dataPoints, wireframe, interactiveList, paletteColors, showLabels, isDark) {
-  // Sort descending by value
+function build3DFunnel(group, dataPoints, wireframe, interactiveList, paletteColors, showLabels, isDark, chartData = null) {
+  // Sort descending by value matching 2D funnel
   const stages = [...dataPoints]
     .sort((a, b) => b.val - a.val)
-    .slice(0, 6);
+    .slice(0, 10);
 
   if (stages.length === 0) return;
 
@@ -2835,7 +4165,7 @@ function build3DFunnel(group, dataPoints, wireframe, interactiveList, paletteCol
  * Slender metallic chrome stalks rising from neon circular ground pads with glossy
  * physical spheres atop each stem and glowing hovering value badges.
  */
-function build3DLollipop(group, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, hasBackdrop) {
+function build3DLollipop(group, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, hasBackdrop, chartData = null) {
   const count = dataPoints.length;
   const spacing = count <= 5 ? 2.3 : Math.max(14 / count, 1.4);
   const startX = -((count - 1) * spacing) / 2;
@@ -2911,6 +4241,48 @@ function build3DLollipop(group, dataPoints, maxVal, maxHeight, wireframe, intera
       val: formatDataValue(d.val)
     };
   });
+
+  // Centered X-Axis Title
+  const padX = spacing * 0.7;
+  const minX = startX - padX;
+  const maxX = (startX + (count - 1) * spacing) + padX;
+  const maxZ = 0.8;
+
+  const xTitle = String(effXCol || 'Category').trim();
+  const xTitleSprite = createAxisTitleSprite(xTitle, false);
+  xTitleSprite.position.set((minX + maxX) / 2, -1.05, maxZ + 0.65);
+  group.add(xTitleSprite);
+
+  // Vertical Y-Axis (Line, Ticks, Labels, Title)
+  const yAxisX = minX - 0.65;
+  const yAxisHeight = maxHeight * 1.06;
+  const axisLineMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.85, linewidth: 2 });
+  const yLineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(yAxisX, 0.02, maxZ),
+    new THREE.Vector3(yAxisX, yAxisHeight, maxZ)
+  ]);
+  group.add(new THREE.Line(yLineGeo, axisLineMat));
+
+  const tickCount = 6;
+  const tickStep = maxVal / (tickCount - 1);
+  for (let t = 0; t < tickCount; t++) {
+    const tickVal = t * tickStep;
+    const tickY = Math.max((tickVal / maxVal) * maxHeight, 0.02);
+    const tickGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(yAxisX, tickY, maxZ),
+      new THREE.Vector3(yAxisX - 0.22, tickY, maxZ)
+    ]);
+    group.add(new THREE.Line(tickGeo, axisLineMat));
+    if (showLabels) {
+      const tickSprite = createAxisTickLabelSprite(formatDataValue(tickVal));
+      tickSprite.position.set(yAxisX - 0.72, tickY, maxZ);
+      group.add(tickSprite);
+    }
+  }
+  const yTitle = String(effYCol || 'Value').trim();
+  const yTitleSprite = createAxisTitleSprite(yTitle, true);
+  yTitleSprite.position.set(yAxisX - 1.5, yAxisHeight / 2, maxZ);
+  group.add(yTitleSprite);
 }
 
 /**
@@ -2920,10 +4292,26 @@ function build3DLollipop(group, dataPoints, maxVal, maxHeight, wireframe, intera
  * Concentric 3D polygonal floor rings, radial spoke lines, and elevated 3D web polygon
  * surface with glowing node spheres and feature labels at perimeter vertices.
  */
-function build3DRadar(group, allRows, numCols, catCols, effXCol, wireframe, interactiveList, paletteColors, showLabels, isDark) {
-  const features = (numCols && numCols.length >= 3)
-    ? numCols.slice(0, 5)
-    : ['Metric A', 'Metric B', 'Metric C', 'Metric D', 'Metric E'];
+function build3DRadar(group, allRows, numCols, catCols, effXCol, wireframe, interactiveList, paletteColors, showLabels, isDark, chartData = null) {
+  let features = [];
+  let seriesList = [];
+
+  if (chartData?.radar?.features && chartData.radar.features.length >= 3) {
+    features = chartData.radar.features;
+    if (chartData.radar.series && chartData.radar.series.length > 0) {
+      seriesList = chartData.radar.series.map(s => ({
+        label: s.label,
+        rawValues: s.raw_values,
+        normValues: s.norm_values
+      }));
+    }
+  }
+
+  if (features.length < 3) {
+    features = (numCols && numCols.length >= 3)
+      ? numCols.slice(0, 5)
+      : ['Metric A', 'Metric B', 'Metric C', 'Metric D', 'Metric E'];
+  }
 
   const numAxes = features.length;
   const radius = 5.2;
@@ -2961,18 +4349,30 @@ function build3DRadar(group, allRows, numCols, catCols, effXCol, wireframe, inte
     group.add(featSprite);
   }
 
-  // Sample entities to plot (up to 2 series)
-  const plotRows = (allRows && allRows.length) ? allRows.slice(0, 2) : [{}, {}];
-  const seriesColors = ['#10B981', '#F43F5E'];
+  // Use exact series if available, otherwise sample entities
+  const seriesColors = ['#10B981', '#F43F5E', '#38BDF8'];
 
-  plotRows.forEach((row, sIdx) => {
+  if (seriesList.length === 0) {
+    const plotRows = (allRows && allRows.length) ? allRows.slice(0, 2) : [{}, {}];
+    seriesList = plotRows.map((row, sIdx) => {
+      const rawValues = features.map(f => parseFloat(row[f]));
+      const normValues = rawValues.map((v, a) => !isNaN(v) ? Math.min(Math.max(v / 100, 0.25), 1.0) : 0.3 + ((a + sIdx * 2) % 5) * 0.15);
+      return {
+        label: `Series ${sIdx + 1}`,
+        rawValues,
+        normValues
+      };
+    });
+  }
+
+  seriesList.forEach((series, sIdx) => {
     const colorHex = seriesColors[sIdx % seriesColors.length];
     const polyPoints = [];
 
     for (let a = 0; a < numAxes; a++) {
       const feat = features[a];
-      const rawVal = parseFloat(row[feat]);
-      const normVal = !isNaN(rawVal) ? Math.min(Math.max(rawVal / 100, 0.25), 1.0) : 0.3 + ((a + sIdx * 2) % 5) * 0.15;
+      const rawVal = series.rawValues[a];
+      const normVal = series.normValues[a] !== undefined ? Math.min(Math.max(series.normValues[a], 0.15), 1.0) : 0.5;
       const angle = a * (Math.PI * 2 / numAxes) - Math.PI / 2;
       const ptX = Math.cos(angle) * radius * normVal;
       const ptZ = Math.sin(angle) * radius * normVal;
@@ -2991,7 +4391,7 @@ function build3DRadar(group, allRows, numCols, catCols, effXCol, wireframe, inte
       });
       const sphere = new THREE.Mesh(sphereGeo, sphereMat);
       sphere.position.copy(pt);
-      sphere.userData = { label: `${feat} (Series ${sIdx + 1})`, val: formatDataValue(rawVal || normVal * 100) };
+      sphere.userData = { label: `${feat} (${series.label})`, val: formatDataValue(rawVal || normVal * 100) };
       group.add(sphere);
       interactiveList.push(sphere);
 
@@ -3019,35 +4419,51 @@ function build3DRadar(group, allRows, numCols, catCols, effXCol, wireframe, inte
  * 3D spatial spheres with true XYZ coordinates, volume-scaled radii, vertical drop lines,
  * ground glow discs, specular glass reflections, and floating badges.
  */
-function build3DBubble(group, allRows, effXCol, effYCol, numCols, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark) {
-  const sizeCol = (numCols || []).find(c => c !== effXCol && c !== effYCol) || effYCol;
-  const rows = (allRows || []).slice(0, 16);
+function build3DBubble(group, allRows, effXCol, effYCol, numCols, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, chartData = null) {
+  const sizeCol = chartData?.size_col || (numCols || []).find(c => c !== effXCol && c !== effYCol) || effYCol;
+  let items = [];
+  let minX = 0, maxX = 1, minY = 0, maxY = 1, minS = 1, maxS = 10;
+
+  if (chartData?.points && chartData.points.length > 0) {
+    items = chartData.points.slice(0, 36);
+    minX = chartData.min_x ?? 0;
+    maxX = chartData.max_x ?? 1;
+    minY = chartData.min_y ?? 0;
+    maxY = chartData.max_y ?? 1;
+    minS = chartData.min_size ?? 1;
+    maxS = chartData.max_size ?? 10;
+  } else {
+    const rows = (allRows || []).slice(0, 16);
+    const xVals = rows.map(r => parseFloat(r[effXCol])).filter(v => !isNaN(v));
+    const yVals = rows.map(r => parseFloat(r[effYCol])).filter(v => !isNaN(v));
+    const sVals = rows.map(r => parseFloat(r[sizeCol])).filter(v => !isNaN(v));
+
+    minX = Math.min(...xVals, 0);
+    maxX = Math.max(...xVals, 1);
+    minY = Math.min(...yVals, 0);
+    maxY = Math.max(...yVals, 1);
+    minS = Math.min(...sVals, 1);
+    maxS = Math.max(...sVals, 10);
+
+    items = rows.map(r => ({
+      x: parseFloat(r[effXCol]),
+      y: parseFloat(r[effYCol]),
+      size: parseFloat(r[sizeCol])
+    }));
+  }
+
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+  const spanS = maxS - minS || 1;
 
   const colorsToUse = (paletteColors && paletteColors.length && paletteColors !== PALETTE_MAP.butter_green)
     ? paletteColors
     : CYBER_3D_PALETTE;
 
-  // Compute ranges
-  const xVals = rows.map(r => parseFloat(r[effXCol])).filter(v => !isNaN(v));
-  const yVals = rows.map(r => parseFloat(r[effYCol])).filter(v => !isNaN(v));
-  const sVals = rows.map(r => parseFloat(r[sizeCol])).filter(v => !isNaN(v));
-
-  const minX = Math.min(...xVals, 0);
-  const maxX = Math.max(...xVals, 1);
-  const spanX = maxX - minX || 1;
-
-  const minY = Math.min(...yVals, 0);
-  const maxY = Math.max(...yVals, 1);
-  const spanY = maxY - minY || 1;
-
-  const minS = Math.min(...sVals, 1);
-  const maxS = Math.max(...sVals, 10);
-  const spanS = maxS - minS || 1;
-
-  rows.forEach((r, i) => {
-    const rawX = parseFloat(r[effXCol]);
-    const rawY = parseFloat(r[effYCol]);
-    const rawS = parseFloat(r[sizeCol]);
+  items.forEach((item, i) => {
+    const rawX = item.x;
+    const rawY = item.y;
+    const rawS = item.size ?? 1.0;
 
     const posX = !isNaN(rawX) ? -6.0 + ((rawX - minX) / spanX) * 12.0 : -5.0 + i * 0.75;
     const posY = !isNaN(rawY) ? 0.8 + ((rawY - minY) / spanY) * (maxHeight - 1.0) : 1.5 + (i % 6);
@@ -3121,10 +4537,10 @@ function build3DBubble(group, allRows, effXCol, effYCol, numCols, maxVal, maxHei
  * Multi-bay cyber matrix of mini 3D plots (binned histograms along the diagonal,
  * mini scatter pedestals on off-diagonals) mounted on elevated cyber bays.
  */
-function build3DPairplot(group, allRows, numCols, wireframe, interactiveList, paletteColors, showLabels, isDark) {
-  const features = (numCols && numCols.length >= 2)
-    ? numCols.slice(0, 3)
-    : ['Feature 1', 'Feature 2', 'Feature 3'];
+function build3DPairplot(group, allRows, numCols, wireframe, interactiveList, paletteColors, showLabels, isDark, chartData = null) {
+  const features = (chartData?.features && chartData.features.length >= 2)
+    ? chartData.features.slice(0, 3)
+    : ((numCols && numCols.length >= 2) ? numCols.slice(0, 3) : ['Feature 1', 'Feature 2', 'Feature 3']);
 
   const gridSize = features.length;
   const baySize = 3.6;

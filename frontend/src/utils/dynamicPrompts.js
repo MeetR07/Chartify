@@ -223,107 +223,32 @@ export function getDynamicQuickChips(dataset) {
 }
 
 /**
- * Generates an ultra-accurate, natural language query for any selected chart type
- * using the currently active dataset's actual column names and statistical properties.
+ * Returns the concise starter prompt for any selected chart type (e.g. 'Plot a line chart of ')
+ * without auto-filling columns, allowing the user to specify their own features.
  */
-export function generateAccurateChartQuery(chartType, dataset) {
+export function generateAccurateChartQuery(chartType) {
   if (!chartType) return '';
 
-  const numCols = dataset?.numeric_columns || [];
-  const allCols = dataset?.columns || [];
-  const catCols = allCols.filter((c) => !numCols.includes(c));
+  const prefixMap = {
+    bar: 'Plot a bar chart of ',
+    line: 'Plot a line chart of ',
+    scatter: 'Plot a scatter plot of ',
+    histogram: 'Plot a histogram of ',
+    box: 'Plot a box plot of ',
+    heatmap: 'Plot a heatmap of ',
+    pie: 'Plot a pie chart of ',
+    donut: 'Plot a donut chart of ',
+    area: 'Plot an area chart of ',
+    violin: 'Plot a violin plot of ',
+    treemap: 'Plot a treemap of ',
+    waterfall: 'Plot a waterfall chart of ',
+    funnel: 'Plot a funnel chart of ',
+    lollipop: 'Plot a lollipop chart of ',
+    radar: 'Plot a radar chart of ',
+    bubble: 'Plot a bubble chart of ',
+    pairplot: 'Plot a pairplot of '
+  };
 
-  // Intelligent column picks
-  const num1 = numCols[0] || allCols[0] || 'measure';
-  const num2 = numCols[1] || numCols[0] || allCols[1] || 'value';
-  const cat1 = catCols[0] || allCols[0] || 'category';
-  const cat2 = catCols[1] || catCols[0] || allCols[1] || 'group';
-
-  // Date / time column detection for chronological charts
-  const dateCol = allCols.find((c) => /date|time|year|month|day|period|timestamp/i.test(c)) || cat1;
-
-  switch (chartType) {
-    case 'bar':
-      return cat1 && num1
-        ? `Generate a bar chart of ${num1} across ${cat1}`
-        : `Create a bar chart comparing top categories`;
-
-    case 'line':
-      return `Plot a line chart of ${num1} over ${dateCol}`;
-
-    case 'scatter':
-      return num1 && num2
-        ? `Create a scatter plot of ${num1} vs ${num2} with regression trendline`
-        : `Generate a scatter plot showing relationship between variables`;
-
-    case 'histogram':
-      return num1
-        ? `Plot a histogram of ${num1} with smooth KDE distribution curve`
-        : `Generate a histogram of numeric distribution`;
-
-    case 'box':
-      return cat1 && num1
-        ? `Show a boxplot of ${num1} grouped by ${cat1}`
-        : `Show a boxplot of ${num1} quartiles`;
-
-    case 'heatmap':
-      return numCols.length >= 2
-        ? `Generate a correlation heatmap of numeric features with annotations`
-        : `Create a correlation heatmap matrix`;
-
-    case 'pie':
-      return cat1 && num1
-        ? `Create a pie chart showing breakdown of ${cat1} by ${num1}`
-        : `Create a pie chart showing breakdown of ${cat1}`;
-
-    case 'donut':
-      return cat1 && num1
-        ? `Generate a donut chart showing proportions of ${num1} across ${cat1}`
-        : `Generate a donut chart of ${cat1} proportions`;
-
-    case 'area':
-      return `Plot an area chart of ${num1} over ${dateCol}`;
-
-    case 'violin':
-      return cat1 && num1
-        ? `Generate a violin plot of ${num1} by ${cat1} with density curve`
-        : `Show a violin distribution plot of ${num1}`;
-
-    case 'treemap':
-      return cat1 && num1
-        ? `Create a treemap showing ${cat1} sized by ${num1}`
-        : `Create a treemap showing hierarchical category breakdown`;
-
-    case 'waterfall':
-      return cat1 && num1
-        ? `Generate a waterfall chart showing ${cat1} vs ${num1}`
-        : `Generate a waterfall flow chart showing changes`;
-
-    case 'funnel':
-      return cat1 && num1
-        ? `Create a funnel chart of ${cat1} stages sized by ${num1}`
-        : `Create a funnel chart showing stage progression`;
-
-    case 'lollipop':
-      return cat1 && num1
-        ? `Create a lollipop chart of ${num1} across ${cat1}`
-        : `Create a lollipop chart showing category rankings`;
-
-    case 'radar':
-      return cat1
-        ? `Generate a radar chart comparing metrics across ${cat1}`
-        : `Generate a radar chart comparing multi-dimensional features`;
-
-    case 'bubble':
-      return num1 && num2
-        ? `Create a bubble chart of ${num1} vs ${num2} ${cat1 ? `colored by ${cat1}` : ''}`
-        : `Generate a bubble chart comparing variables`;
-
-    case 'pairplot':
-      return `Generate a pairplot matrix comparing all numeric feature distributions`;
-
-    default:
-      return `Generate a ${chartType} chart for this dataset`;
-  }
+  return prefixMap[chartType.toLowerCase()] || `Plot a ${chartType} chart of `;
 }
 
