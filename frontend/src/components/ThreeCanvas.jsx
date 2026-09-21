@@ -739,7 +739,8 @@ function ThreeCanvasInner({ activeChart, dataset, selectedPalette, selectedStyle
         chart_url: activeChart?.chart_url || null
       };
 
-      const res = await fetch('http://localhost:8000/api/summarize-chart', {
+      const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+      const res = await fetch(`${apiBase}/api/summarize-chart`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
