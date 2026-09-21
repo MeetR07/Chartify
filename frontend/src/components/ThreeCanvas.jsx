@@ -609,11 +609,82 @@ export function resolveBackgroundTheme(styleKey = 'whitegrid', paletteKey = 'but
   };
 }
 
-export default function ThreeCanvas({ activeChart, dataset, selectedPalette, selectedStyle }) {
+class ThreeErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('ThreeCanvas caught error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '100%',
+          height: '100%',
+          minHeight: '450px',
+          background: 'radial-gradient(circle at 50% 35%, #0c1838 0%, #050b1a 100%)',
+          color: '#f8fafc',
+          padding: '2rem',
+          borderRadius: '16px',
+          textAlign: 'center'
+        }}>
+          <div style={{ fontSize: '32px', marginBottom: '12px' }}>🪐</div>
+          <h3 style={{ fontSize: '18px', fontWeight: 600, margin: '0 0 8px' }}>3D View Notice</h3>
+          <p style={{ fontSize: '13px', opacity: 0.75, maxWidth: '420px', margin: '0 0 16px' }}>
+            {this.state.error?.message || 'An error occurred while loading 3D visualization.'}
+          </p>
+          <button
+            type="button"
+            onClick={() => this.setState({ hasError: false, error: null })}
+            style={{
+              padding: '8px 18px',
+              borderRadius: '8px',
+              border: 'none',
+              background: '#0ea5e9',
+              color: '#ffffff',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: '13px'
+            }}
+          >
+            Reload 3D View
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function ThreeCanvasInner({ activeChart, dataset, selectedPalette, selectedStyle }) {
   const mountRef = useRef(null);
   const tooltipRef = useRef(null);
   const tooltipLabelRef = useRef(null);
   const tooltipValRef = useRef(null);
+
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== 'undefined' ? window.innerWidth <= 768 : false
+  );
+
+  useEffect(() => {
+    const handleResizeMobile = () => {
+      setIsMobile(typeof window !== 'undefined' && window.innerWidth <= 768);
+    };
+    window.addEventListener('resize', handleResizeMobile);
+    return () => window.removeEventListener('resize', handleResizeMobile);
+  }, []);
 
   const [autoRotate, setAutoRotate] = useState(false);
   const [wireframe, setWireframe] = useState(false);
@@ -732,7 +803,6 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
     cameraRef.current = camera;
 
     // 3. Renderer
-    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     renderer.setSize(width, height);
     renderer.setPixelRatio(isMobile ? Math.min(window.devicePixelRatio || 1, 1.5) : Math.min(window.devicePixelRatio || 1, 2));
@@ -1270,12 +1340,22 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
 
         <button
           type="button"
+          className={`three-btn ${displayMode === 'mesh' ? 'active' : ''}`}
+          onClick={() => setDisplayMode('mesh')}
+          title="Switch to 3D Procedural Mesh"
+        >
+          <Box size={13} />
+          <span>3D MESH</span>
+        </button>
+
+        <button
+          type="button"
           className={`three-btn ${displayMode === 'card' ? 'active' : ''}`}
-          onClick={() => setDisplayMode(displayMode === 'card' ? 'mesh' : 'card')}
-          title={displayMode === 'card' ? 'Switch to 3D Procedural Mesh' : 'Mount 2D Chart onto 3D Card'}
+          onClick={() => setDisplayMode('card')}
+          title="Mount 2D Chart onto 3D Card"
         >
           <Layers size={13} />
-          <span>{displayMode === 'card' ? '3D CARD' : '3D MESH'}</span>
+          <span>3D CARD</span>
         </button>
 
         <button
@@ -1294,6 +1374,14 @@ export default function ThreeCanvas({ activeChart, dataset, selectedPalette, sel
       {/* Cute Pet Robot Companion hint badge in 3D Card Mode */}
 
     </div>
+  );
+}
+
+export default function ThreeCanvas(props) {
+  return (
+    <ThreeErrorBoundary>
+      <ThreeCanvasInner {...props} />
+    </ThreeErrorBoundary>
   );
 }
 
