@@ -10,7 +10,7 @@ export default function Footer() {
           <span className="footer-desc">Autonomous AI Data Visualization & Analytics Engine</span>
         </div>
         <div className="footer-right">
-          <span>Multi-Provider Cascade: Gemini • Mistral • Groq LPU</span>
+          <span className="footer-providers">Multi-Provider Cascade: Gemini • Mistral • Groq LPU</span>
           <span className="footer-sep" aria-hidden="true">•</span>
           <span className="footer-badge">⚡ ALL SYSTEMS GO</span>
         </div>
