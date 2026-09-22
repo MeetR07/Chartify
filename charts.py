@@ -533,7 +533,7 @@ def smart_preprocess_data(
 @tool
 def generate_chart(
     chart_type: Literal[
-        "bar", "line", "scatter", "histogram", 
+        "bar", "column", "vertical_bar", "horizontal_bar", "line", "scatter", "histogram", 
         "box", "heatmap", "pie", "area", "violin", "pairplot",
         "treemap", "waterfall", "donut", "funnel", "lollipop", "radar", "bubble"
     ],
@@ -546,17 +546,19 @@ def generate_chart(
     output_path: Optional[str] = None,
     query: Optional[str] = None,
     precomputed_df: Optional[Any] = None,
-    unified_contract: Optional[Any] = None
+    unified_contract: Optional[Any] = None,
+    orientation: Optional[Literal["vertical", "horizontal", "auto"]] = "auto"
 ) -> str:
     """Generates and saves an ultra-modern, publication-quality data visualization chart.
     Args:
-        chart_type: The chart visualization type.
+        chart_type: The chart visualization type ('bar', 'column', 'vertical_bar', 'horizontal_bar', 'line', etc.).
         x_col: Category or X-axis column name.
         y_col: Numeric measure or Y-axis column name.
         hue_col: Optional category column for grouping.
         title: Short descriptive title for the chart.
         palette: Color palette name (vibrant, cyberpunk, emerald, sunset, ocean, purple, luxe, monochrome).
         style: Theme style ('whitegrid', 'darkgrid', 'white', 'dark').
+        orientation: Optional explicit bar orientation ('vertical', 'horizontal', 'auto').
     """
     global LAST_CHART_DATA
     chart_t = (chart_type or "bar").lower().strip()
@@ -708,7 +710,7 @@ def generate_chart(
         # --------------------------------------------------------------------------
         # Chart 1: Bar Chart (Ultra-Modern Vertical for Timeline, Horizontal for Ranking)
         # --------------------------------------------------------------------------
-        if chart_t == "bar":
+        if chart_t in ["bar", "column", "vertical_bar", "horizontal_bar"]:
             if safe_hue:
                 # Grouped vertical bar chart
                 colors = resolve_palette_colors(palette, plot_df[safe_hue].nunique() if safe_hue in plot_df.columns else 6)
@@ -731,14 +733,39 @@ def generate_chart(
                     w in f"{query or ''} {title or ''}".lower() for w in ["year by year", "by year", "over time", "yearly", "monthly", "timeline", "chronological", "trend", "annual"]
                 )
 
-                if is_temporal:
+                # Check explicit orientation triggers from chart type, orientation param, or user query text
+                query_text = f"{query or ''} {title or ''}".lower()
+                user_wants_vertical = (
+                    chart_t in ["column", "vertical_bar"] or
+                    str(orientation).lower() in ["vertical", "vert", "v"] or
+                    any(w in query_text for w in ["vertical bar", "vertical", "column chart", "column", "standing", "upright", "verticale"])
+                )
+                user_wants_horizontal = (
+                    chart_t in ["horizontal_bar"] or
+                    str(orientation).lower() in ["horizontal", "horiz", "h"] or
+                    any(w in query_text for w in ["horizontal bar", "horizontal", "sideways"])
+                )
+
+                if user_wants_vertical:
+                    is_vertical = True
+                elif user_wants_horizontal:
+                    is_vertical = False
+                elif is_temporal:
+                    is_vertical = True
+                else:
+                    # Default heuristic when unspecified: vertical if <= 10 categories and labels <= 20 chars
+                    categories_sample = plot_df[x_col].astype(str).tolist() if x_col and x_col in plot_df.columns else []
+                    max_label_len = max((len(c) for c in categories_sample), default=0)
+                    is_vertical = len(categories_sample) <= 10 and max_label_len <= 20
+
+                if is_vertical:
                     # ----------------------------------------------------------
-                    # Studio Vertical Column Bar Chart for Temporal / Chronological Data
-                    # (Time flows horizontally on X-axis, metric vertically on Y-axis)
+                    # Studio Vertical Column Bar Chart
+                    # (Categories on X-axis, metric vertically on Y-axis)
                     # ----------------------------------------------------------
                     is_horizontal_bar = False
 
-                    if x_col and x_col in plot_df.columns:
+                    if is_temporal and x_col and x_col in plot_df.columns:
                         plot_df = plot_df.sort_values(by=x_col, ascending=True).reset_index(drop=True)
 
                     categories = plot_df[x_col].astype(str).tolist() if x_col and x_col in plot_df.columns else []
@@ -762,21 +789,24 @@ def generate_chart(
                     )
 
                     ax.set_xticks(x_positions)
-                    rot = 25 if (any(len(c) > 5 for c in categories) or n_items > 10) else 0
+                    rot = 25 if (any(len(str(c)) > 5 for c in categories) or n_items > 8) else 0
                     ax.set_xticklabels(categories, fontsize=10, weight="bold", color=text_color, rotation=rot, ha="right" if rot else "center")
 
                     max_val = max(values) if values and max(values) > 0 else 1
-                    ax.set_ylim(0, max_val * 1.16)
+                    min_val = min(values) if values and min(values) < 0 else 0
+                    ax.set_ylim(min(0, min_val * 1.15), max_val * 1.16)
 
                     # Direct crisp value labels on top of each vertical bar
                     for bar, val in zip(bars, values):
                         h = bar.get_height()
                         x_pos = bar.get_x() + bar.get_width() / 2
+                        label_y = h + (max_val * 0.02) if h >= 0 else h - (abs(max_val) * 0.04)
+                        va_align = "bottom" if h >= 0 else "top"
                         ax.text(
                             x_pos,
-                            h + (max_val * 0.02),
+                            label_y,
                             f"{format_num_human(val)}",
-                            va="bottom",
+                            va=va_align,
                             ha="center",
                             fontsize=9.5,
                             weight="bold",
@@ -784,7 +814,7 @@ def generate_chart(
                             zorder=4
                         )
 
-                    ax.set_xlabel(x_col.replace("_", " ").title() if x_col else "Time", fontsize=10.5, weight="bold", color=text_color, labelpad=8)
+                    ax.set_xlabel(x_col.replace("_", " ").title() if x_col else "Category", fontsize=10.5, weight="bold", color=text_color, labelpad=8)
                     ax.set_ylabel(effective_y.replace("_", " ").title() if effective_y else "Value", fontsize=10, color=muted_color, labelpad=8)
                 else:
                     # ----------------------------------------------------------
@@ -1441,7 +1471,7 @@ def generate_chart(
                     {"label": f"({p['x']:.2f}, {p['y']:.2f})", "val": p["y"]}
                     for p in chart_meta["points"][:24]
                 ]
-            elif chart_t == "bar":
+            elif chart_t in ["bar", "column", "vertical_bar", "horizontal_bar"]:
                 if 'categories' in locals() and 'values' in locals():
                     if is_horizontal_bar:
                         # 2D horizontal bar has categories ordered ascending for ax.barh (so highest is at top y=N-1).

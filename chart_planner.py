@@ -47,6 +47,13 @@ class ChartPlanner:
             is_chronological = any(m in str(result_df[group_col].iloc[0]).lower() for m in ["jan", "feb", "mar", "q1", "2020", "2021", "2022", "2023", "2024", "2025"])
 
         # 1. Evaluate Explicit User Request against Data Shape
+        query_text = (plan.get("explanation") or "").lower()
+        if not requested_chart:
+            if any(w in query_text for w in ["vertical bar", "vertical", "column"]):
+                requested_chart = "column"
+            elif any(w in query_text for w in ["horizontal bar", "horizontal"]):
+                requested_chart = "horizontal_bar"
+
         if requested_chart:
             # Pie / Donut Conflict Resolution: Needs <= 7 categories and positive values
             if requested_chart in ["pie", "donut", "doughnut"]:

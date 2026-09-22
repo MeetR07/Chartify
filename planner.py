@@ -187,6 +187,21 @@ class RuleBasedFallbackPlanner:
                         best_c = c
             return best_c
 
+        # Check for explicit chart orientation/type request in query
+        explicit_chart = None
+        if any(w in clean_q for w in ["vertical bar", "vertical", "column chart", "column", "standing bar", "upright"]):
+            explicit_chart = {"explicit": True, "type": "column"}
+        elif any(w in clean_q for w in ["horizontal bar", "horizontal"]):
+            explicit_chart = {"explicit": True, "type": "horizontal_bar"}
+        elif "pie" in clean_q:
+            explicit_chart = {"explicit": True, "type": "pie"}
+        elif "donut" in clean_q:
+            explicit_chart = {"explicit": True, "type": "donut"}
+        elif "scatter" in clean_q:
+            explicit_chart = {"explicit": True, "type": "scatter"}
+        elif "line" in clean_q:
+            explicit_chart = {"explicit": True, "type": "line"}
+
         # Template 1: Top-N Ranking ("top 10 cities by revenue", "top 5 models by price")
         top_n_match = re.search(r"\btop\s+(\d+)\s+([a-zA-Z0-9_\s]+?)\s+(?:by|with highest|for)\s+([a-zA-Z0-9_\s]+)", clean_q)
         if top_n_match:
@@ -209,7 +224,7 @@ class RuleBasedFallbackPlanner:
                     "filters": [],
                     "sort": {"column": measure_col, "direction": "desc"},
                     "limit": limit,
-                    "chart_request": {"explicit": False, "type": "bar"},
+                    "chart_request": explicit_chart or {"explicit": False, "type": "bar"},
                     "explanation": f"Ranked top {limit} {dim_col} by total {measure_col}"
                 }
 
@@ -284,7 +299,7 @@ class RuleBasedFallbackPlanner:
                         "filters": [],
                         "sort": {"column": "count", "direction": "desc"},
                         "limit": 16,
-                        "chart_request": {"explicit": False, "type": "bar"},
+                        "chart_request": explicit_chart or {"explicit": False, "type": "bar"},
                         "explanation": f"Count of records grouped by {dim_col}"
                     }
 
@@ -304,7 +319,7 @@ class RuleBasedFallbackPlanner:
                         "filters": [],
                         "sort": sort_spec,
                         "limit": 16,
-                        "chart_request": {"explicit": False, "type": chart_t},
+                        "chart_request": explicit_chart or {"explicit": False, "type": chart_t},
                         "explanation": f"{agg.capitalize()} of {measure_col} grouped by {dim_col}"
                     }
 
@@ -330,7 +345,7 @@ class RuleBasedFallbackPlanner:
                     "filters": [],
                     "sort": {"column": "count", "direction": "desc"},
                     "limit": 16,
-                    "chart_request": {"explicit": False, "type": "bar"},
+                    "chart_request": explicit_chart or {"explicit": False, "type": "bar"},
                     "explanation": f"Count of {target_col or 'items'} grouped by {dim_col}"
                 }
 

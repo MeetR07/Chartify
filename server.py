@@ -63,6 +63,7 @@ class QueryRequest(BaseModel):
     style: Optional[str] = "whitegrid"
     palette: Optional[str] = "deep"
     session_id: Optional[str] = "default"
+    orientation: Optional[str] = "auto"
 
 
 class StyleRequest(BaseModel):
@@ -73,6 +74,7 @@ class StyleRequest(BaseModel):
     title: Optional[str] = "Data Analysis Chart"
     style: Optional[str] = "whitegrid"
     palette: Optional[str] = "deep"
+    orientation: Optional[str] = "auto"
 
 
 class SummarizeRequest(BaseModel):
@@ -346,6 +348,7 @@ async def generate_chart_endpoint(req: QueryRequest):
             "style": req.style or "whitegrid",
             "palette": req.palette or "deep",
             "query": req.query,
+            "orientation": getattr(req, "orientation", "auto") or "auto",
             "output_path": ":memory:",
             "precomputed_df": result_df,
             "unified_contract": contract
@@ -370,6 +373,7 @@ async def generate_chart_endpoint(req: QueryRequest):
             "style": req.style or "whitegrid",
             "palette": req.palette or "deep",
             "query": req.query,
+            "orientation": getattr(req, "orientation", "auto") or "auto",
             "output_path": f"{chosen_chart}.png"
         }
 

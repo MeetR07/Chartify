@@ -1431,7 +1431,7 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
       val: parseFloat(d.val) || 0
     }));
   } else {
-    const isCategoricalChart = ['bar', 'pie', 'donut', 'lollipop', 'waterfall', 'funnel', 'treemap', 'tree'].some(t => chartType.includes(t));
+    const isCategoricalChart = ['bar', 'column', 'pie', 'donut', 'lollipop', 'waterfall', 'funnel', 'treemap', 'tree'].some(t => chartType.includes(t));
 
     if (isCategoricalChart) {
       // Aggregate by category (effXCol) matching 2D chart behavior exactly

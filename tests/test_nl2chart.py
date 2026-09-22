@@ -220,6 +220,14 @@ class TestNL2ChartUniversalEngine(unittest.TestCase):
         self.assertTrue(contract1["data_signature"].startswith("sha256:"))
         self.assertEqual(len(contract1["data_points"]), len(self.retail_df))
 
+    def test_vertical_bar_column_chart_selection(self):
+        """User request for vertical bar / column chart selects column type"""
+        plan, _ = LLMQueryPlanner.generate_plan("vertical bar chart of sales by region", self.retail_df)
+        self.assertEqual(plan["chart_request"]["type"], "column")
+        res_df, exec_meta = DeterministicDataEngine.execute_plan(self.retail_df, plan)
+        chart_type, _ = ChartPlanner.select_and_validate_chart(res_df, plan, exec_meta)
+        self.assertEqual(chart_type, "column")
+
 
 if __name__ == "__main__":
     unittest.main()

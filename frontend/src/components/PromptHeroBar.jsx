@@ -3,7 +3,8 @@ import { Sparkles, X, RefreshCw, Flame, ChevronDown, Search, Paperclip, ArrowRig
 
 const CHART_TYPES = [
   { value: '', label: 'All Charts (Auto)' },
-  { value: 'bar', label: 'Bar Chart' },
+  { value: 'column', label: 'Vertical Bar (Column)' },
+  { value: 'bar', label: 'Horizontal Bar' },
   { value: 'line', label: 'Line Chart' },
   { value: 'scatter', label: 'Scatter Plot' },
   { value: 'histogram', label: 'Histogram' },
