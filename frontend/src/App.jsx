@@ -13,7 +13,12 @@ import { THEME_STYLES, PALETTES } from './constants/themeOptions';
 import { generateAccurateChartQuery, getDynamicQuickChips } from './utils/dynamicPrompts';
 import { parseCSVClientSide } from './utils/csvParser';
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
+    ? 'https://chartify-g0oj.onrender.com'
+    : '')
+).replace(/\/$/, '');
 
 const DEFAULT_DATASET = {
   columns: ["Month", "Sales", "Profit", "Region"],

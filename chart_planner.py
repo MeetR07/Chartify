@@ -144,7 +144,16 @@ def build_unified_data_contract(
             float_val = 0.0
 
         label_str = str(row[group_col]) if group_col in result_df.columns else f"Item {idx + 1}"
-        raw_dict = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+        raw_dict = {}
+        for k, v in row.to_dict().items():
+            if pd.isna(v):
+                raw_dict[k] = None
+            elif isinstance(v, (np.integer, int)):
+                raw_dict[k] = int(v)
+            elif isinstance(v, (np.floating, float)):
+                raw_dict[k] = float(v)
+            else:
+                raw_dict[k] = str(v)
 
         data_points.append({
             "label": label_str,

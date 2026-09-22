@@ -361,11 +361,23 @@ async def generate_chart_endpoint(req: QueryRequest):
             "timestamp": time.time()
         }
 
+        client_tool_args = {
+            "chart_type": chosen_chart,
+            "x_col": contract["x_col"],
+            "y_col": contract["y_col"],
+            "hue_col": contract.get("hue_col"),
+            "title": title_text,
+            "style": req.style or "whitegrid",
+            "palette": req.palette or "deep",
+            "query": req.query,
+            "output_path": f"{chosen_chart}.png"
+        }
+
         return {
             "success": True,
             "tool_called": True,
             "chart_type": chosen_chart,
-            "tool_args": render_args,
+            "tool_args": client_tool_args,
             "chart_data": contract,
             "data_signature": contract["data_signature"],
             "fallback_note": fallback_note,
