@@ -49,16 +49,50 @@ export default function App() {
     const saved = localStorage.getItem('chartify_theme');
     return saved === 'dark' ? 'light' : (saved || 'light');
   });
-  const [dataset, setDataset] = useState(DEFAULT_DATASET);
+  const [dataset, setDataset] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chartify_dataset');
+      return saved ? JSON.parse(saved) : DEFAULT_DATASET;
+    } catch {
+      return DEFAULT_DATASET;
+    }
+  });
   const [query, setQuery] = useState('');
   const [selectedChartType, setSelectedChartType] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [activeChart, setActiveChart] = useState(null);
-  const [sessionTokens, setSessionTokens] = useState(0);
-  const [chartHistory, setChartHistory] = useState([]);
+  const [activeChart, setActiveChart] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chartify_active_chart');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [sessionTokens, setSessionTokens] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chartify_tokens');
+      return saved ? parseInt(saved, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [chartHistory, setChartHistory] = useState(() => {
+    try {
+      const saved = localStorage.getItem('chartify_chart_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [zoomModal, setZoomModal] = useState(false);
-  const [viewMode, setViewMode] = useState('2d');
+  const [viewMode, setViewMode] = useState(() => {
+    try {
+      return localStorage.getItem('chartify_view_mode') || '2d';
+    } catch {
+      return '2d';
+    }
+  });
   const [datasetModal, setDatasetModal] = useState(false);
   const [tableSearch, setTableSearch] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'error' });
@@ -83,6 +117,58 @@ export default function App() {
     localStorage.setItem('chartify_theme', theme);
   }, [theme]);
 
+  // Auto-save activeChart across refreshes
+  useEffect(() => {
+    try {
+      if (activeChart) {
+        localStorage.setItem('chartify_active_chart', JSON.stringify(activeChart));
+      } else {
+        localStorage.removeItem('chartify_active_chart');
+      }
+    } catch (e) {
+      console.warn('LocalStorage save failed for activeChart:', e);
+    }
+  }, [activeChart]);
+
+  // Auto-save chartHistory across refreshes (keeps latest 12)
+  useEffect(() => {
+    try {
+      if (chartHistory && chartHistory.length > 0) {
+        const trimmed = chartHistory.slice(0, 12);
+        localStorage.setItem('chartify_chart_history', JSON.stringify(trimmed));
+      } else {
+        localStorage.removeItem('chartify_chart_history');
+      }
+    } catch (e) {
+      console.warn('LocalStorage save failed for chartHistory:', e);
+    }
+  }, [chartHistory]);
+
+  // Auto-save dataset across refreshes
+  useEffect(() => {
+    try {
+      if (dataset) {
+        localStorage.setItem('chartify_dataset', JSON.stringify(dataset));
+      }
+    } catch (e) {
+      console.warn('LocalStorage save failed for dataset:', e);
+    }
+  }, [dataset]);
+
+  // Auto-save viewMode
+  useEffect(() => {
+    try {
+      localStorage.setItem('chartify_view_mode', viewMode);
+    } catch (_) {}
+  }, [viewMode]);
+
+  // Auto-save sessionTokens
+  useEffect(() => {
+    try {
+      localStorage.setItem('chartify_tokens', String(sessionTokens));
+    } catch (_) {}
+  }, [sessionTokens]);
+
   // Click outside to close dropdowns only when clicked outside both
   useEffect(() => {
     const handleOutsideClick = (e) => {
@@ -98,9 +184,13 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  // Fetch current dataset metadata
+  // Fetch current dataset metadata only if not already restored from localStorage
   const fetchDataset = async () => {
     try {
+      const saved = localStorage.getItem('chartify_dataset');
+      if (saved) {
+        return;
+      }
       const res = await fetch(`${API_BASE}/api/dataset`);
       if (res.ok) {
         const data = await res.json();
