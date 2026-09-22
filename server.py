@@ -26,6 +26,13 @@ if hasattr(sys.stderr, "reconfigure"):
 
 import charts
 import main
+from profiler import profile_dataset, get_dataset_schema, clear_profile_cache
+from planner import LLMQueryPlanner, PlanValidator, check_column_ambiguity
+from engine import DeterministicDataEngine, ResultValidator
+from chart_planner import ChartPlanner, build_unified_data_contract
+
+# Multi-turn / Follow-up session store
+SESSION_STORE: Dict[str, Dict[str, Any]] = {}
 
 def get_chart_data_url(filename: str) -> str:
     """Reads image file and converts to Base64 Data URI so browser displays it in-memory without HTTP request (completely prevents any auto-download)."""
@@ -55,6 +62,7 @@ class QueryRequest(BaseModel):
     query: str
     style: Optional[str] = "whitegrid"
     palette: Optional[str] = "deep"
+    session_id: Optional[str] = "default"
 
 
 class StyleRequest(BaseModel):
@@ -247,7 +255,10 @@ async def upload_csv(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="Uploaded CSV file is empty.")
 
         main.df = new_df
+        clear_profile_cache()
         LLM_CACHE.clear()
+        SESSION_STORE.clear()
+        profile_dataset(new_df)
 
         return build_dataset_payload(new_df, filename=file.filename)
     except HTTPException:
@@ -258,124 +269,110 @@ async def upload_csv(file: UploadFile = File(...)):
 
 @app.post("/api/generate-chart")
 async def generate_chart_endpoint(req: QueryRequest):
-    """Processes user natural language request asynchronously with non-blocking thread execution for high concurrency."""
+    """Processes user natural language request asynchronously through the layered NL-to-Chart pipeline."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
     try:
         current_df = main.df
-        clean_q = req.query.strip().lower()
-        cache_key = (clean_q, tuple(current_df.columns))
+        session_id = getattr(req, "session_id", "default") or "default"
+        session_state = SESSION_STORE.get(session_id, {})
+        schema = get_dataset_schema(current_df)
 
-        # Check instant query cache
-        if cache_key in LLM_CACHE:
-            cached_data = LLM_CACHE[cache_key]
-            args = dict(cached_data["tool_args"])
-            if req.style:
-                args["style"] = req.style
-            if req.palette:
-                args["palette"] = req.palette
-
-            args["query"] = req.query
-            args["output_path"] = ":memory:"
-            data_url = await asyncio.to_thread(render_chart_safe, args)
+        # 1. Ambiguity Detection (Quantitative confidence scoring)
+        is_ambig, candidates, ambig_msg = check_column_ambiguity(req.query, schema)
+        if is_ambig:
             return {
-                "success": True,
-                "tool_called": True,
-                "chart_type": args.get("chart_type", "chart"),
-                "tool_args": args,
-                "chart_data": charts.get_last_chart_data(),
-                "result": "Rendered in-memory",
-                "chart_filename": f"{args.get('chart_type', 'chart')}.png",
-                "chart_url": data_url,
-                "tokens": cached_data.get("tokens", {"total": 0, "input": 0, "output": 0})
+                "success": False,
+                "clarification_needed": True,
+                "ambiguity_type": "column",
+                "options": candidates,
+                "message": ambig_msg
             }
 
-        # Invoke multi-model fallback cascade asynchronously (non-blocking)
-        ai_message = None
-        model_used = None
-        try:
-            ai_message, model_used = await asyncio.to_thread(
-                main.invoke_ai_with_fallbacks, {
-                    "columns": list(current_df.columns),
-                    "sample_data": current_df.head(3).to_dict(orient="records"),
-                    "df": current_df,
-                    "user_query": req.query
-                }
-            )
-        except Exception as ai_err:
-            try:
-                print(f"[WARN] Multi-model cascade error: {ai_err}")
-            except Exception:
-                pass
+        # 2. Structured Query Planning with Rule Fast-Path & Cascade Fallbacks
+        plan, plan_meta = LLMQueryPlanner.generate_plan(
+            query=req.query,
+            df=current_df,
+            session_state=session_state
+        )
 
-        if ai_message and getattr(ai_message, "tool_calls", None):
-            tool_call = ai_message.tool_calls[0]
-            args = dict(tool_call.get("args", {}))
-            usage = getattr(ai_message, "usage_metadata", None) or {}
-            tokens_info = {
-                "total": usage.get("total_tokens", 0),
-                "input": usage.get("input_tokens", 0),
-                "output": usage.get("output_tokens", 0),
-                "model": model_used
-            }
-        else:
-            # Bulletproof instant fallback: Smart Heuristic Extractor
-            # Guarantees zero 429 quota exhaustion errors
-            try:
-                print(f"[INFO] Smart Heuristic instant extraction activated for query: '{req.query}'")
-            except Exception:
-                pass
-            args = main.heuristic_chart_extractor(req.query, current_df)
-            tokens_info = {
-                "total": 0,
-                "input": 0,
-                "output": 0,
-                "model": "heuristic_instant"
+        if plan.get("clarification_needed"):
+            return plan
+
+        # 3. Plan Validation (Multi-layer pre-execution)
+        is_valid_plan, plan_err, fix_info = PlanValidator.validate_plan(plan, schema)
+        if not is_valid_plan:
+            return {
+                "success": False,
+                "validation_error": True,
+                "message": plan_err or "Invalid query plan.",
+                "fix_info": fix_info
             }
 
-        if req.style:
-            args["style"] = req.style
-        if req.palette:
-            args["palette"] = req.palette
+        # 4. Deterministic Data Engine Execution (Zero code execution)
+        result_df, exec_meta = DeterministicDataEngine.execute_plan(current_df, plan)
 
-        args["query"] = req.query
+        # 5. Result Validation
+        is_valid_res, res_err = ResultValidator.validate(result_df, plan, exec_meta)
+        if not is_valid_res:
+            return {
+                "success": False,
+                "validation_error": True,
+                "message": res_err or "Data execution yielded an invalid result."
+            }
 
-        # Cache tool args for subsequent instant generations
-        LLM_CACHE[cache_key] = {
-            "tool_args": dict(args),
-            "tokens": tokens_info
+        # Edge Case: 0 records after filtering
+        if len(result_df) == 0:
+            return {
+                "success": False,
+                "no_data": True,
+                "message": "No data matches your filter criteria (0 rows found)."
+            }
+
+        # 6. Chart Selection & Conflict Resolution
+        chosen_chart, fallback_note = ChartPlanner.select_and_validate_chart(result_df, plan, exec_meta)
+
+        # 7. Build Unified 2D/3D Data Contract (Identical source of truth for both renderers)
+        contract = build_unified_data_contract(result_df, plan, exec_meta, chosen_chart, fallback_note)
+
+        # 8. Render Studio 2D Chart with precomputed DataFrame
+        title_text = plan.get("explanation") or f"{contract['axis_metadata']['y_label']} by {contract['axis_metadata']['x_label']}"
+        render_args = {
+            "chart_type": chosen_chart,
+            "x_col": contract["x_col"],
+            "y_col": contract["y_col"],
+            "title": title_text,
+            "style": req.style or "whitegrid",
+            "palette": req.palette or "deep",
+            "query": req.query,
+            "output_path": ":memory:",
+            "precomputed_df": result_df,
+            "unified_contract": contract
         }
 
-        args["output_path"] = ":memory:"
-        # Render chart purely in-memory in a background thread (event loop never freezes)
-        data_url = await asyncio.to_thread(render_chart_safe, args)
+        data_url = await asyncio.to_thread(render_chart_safe, render_args)
 
-        # Self-healing fallback: If LLM generated bad args, instantly recover via heuristic
-        if isinstance(data_url, str) and data_url.startswith("Error generating"):
-            try:
-                print(f"[WARN] AI produced rendering error: '{data_url[:80]}'. Self-healing via Heuristic...")
-            except Exception:
-                pass
-            args = main.heuristic_chart_extractor(req.query, current_df)
-            if req.style:
-                args["style"] = req.style
-            if req.palette:
-                args["palette"] = req.palette
-            args["output_path"] = ":memory:"
-            data_url = await asyncio.to_thread(render_chart_safe, args)
-            tokens_info["model"] = f"{tokens_info.get('model', 'ai')}_self_healed"
+        # 9. Update Session Store
+        SESSION_STORE[session_id] = {
+            "last_query": req.query,
+            "last_plan": plan,
+            "last_result_schema": {c: str(t) for c, t in zip(result_df.columns, result_df.dtypes)},
+            "timestamp": time.time()
+        }
 
         return {
             "success": True,
             "tool_called": True,
-            "chart_type": args.get("chart_type", "chart"),
-            "tool_args": args,
-            "chart_data": charts.get_last_chart_data(),
+            "chart_type": chosen_chart,
+            "tool_args": render_args,
+            "chart_data": contract,
+            "data_signature": contract["data_signature"],
+            "fallback_note": fallback_note,
             "result": "Rendered in-memory",
-            "chart_filename": f"{args.get('chart_type', 'chart')}.png",
+            "chart_filename": f"{chosen_chart}.png",
             "chart_url": data_url,
-            "tokens": tokens_info
+            "tokens": {"total": 0, "input": 0, "output": 0, "model": plan_meta.get("model") if plan_meta else "engine"}
         }
 
     except Exception as e:

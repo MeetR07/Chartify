@@ -296,7 +296,17 @@ export default function App() {
 
       if (res.ok) {
         const data = await res.json();
-        if (data.success && data.tool_called) {
+        if (data.clarification_needed) {
+          setToast({
+            message: `🤔 ${data.message}`,
+            type: 'error'
+          });
+        } else if (data.no_data) {
+          setToast({
+            message: `ℹ️ ${data.message}`,
+            type: 'error'
+          });
+        } else if (data.success && data.tool_called) {
           const newChart = {
             id: Date.now(),
             url: data.chart_url,
@@ -306,6 +316,8 @@ export default function App() {
             query: q,
             result: data.result,
             chart_data: data.chart_data,
+            data_signature: data.data_signature,
+            fallback_note: data.fallback_note,
             args: {
               ...data.tool_args,
               style: effectiveStyle,
@@ -316,9 +328,16 @@ export default function App() {
           setViewMode('2d');
           setChartHistory((prev) => [newChart, ...prev]);
           setSessionTokens((prev) => prev + (data.tokens?.total || 0));
+
+          if (data.fallback_note) {
+            setToast({
+              message: `💡 ${data.fallback_note}`,
+              type: 'success'
+            });
+          }
         } else {
           setToast({
-            message: data.detail || 'Chart generation tool failed to produce a chart',
+            message: data.message || data.detail || 'Chart generation tool failed to produce a chart',
             type: 'error'
           });
         }

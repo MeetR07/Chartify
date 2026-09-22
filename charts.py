@@ -544,7 +544,9 @@ def generate_chart(
     palette: Optional[str] = None,
     style: Optional[str] = "whitegrid",
     output_path: Optional[str] = None,
-    query: Optional[str] = None
+    query: Optional[str] = None,
+    precomputed_df: Optional[Any] = None,
+    unified_contract: Optional[Any] = None
 ) -> str:
     """Generates and saves an ultra-modern, publication-quality data visualization chart.
     Args:
@@ -660,7 +662,10 @@ def generate_chart(
         ax.set_facecolor(bg_color)
 
         # Big Data Scalability Preprocessing
-        plot_df = smart_preprocess_data(df, chart_t, x_col, y_col, safe_hue, query=query, title=title)
+        if precomputed_df is not None and isinstance(precomputed_df, pd.DataFrame) and not precomputed_df.empty:
+            plot_df = precomputed_df.copy()
+        else:
+            plot_df = smart_preprocess_data(df, chart_t, x_col, y_col, safe_hue, query=query, title=title)
 
         # Detect intent for rendering orientation and metrics
         query_op, _ = detect_query_intent(query, title)
@@ -1704,7 +1709,10 @@ def generate_chart(
                         {"label": str(r[x_col]), "val": float(r[effective_y])} for _, r in grouped_p.iterrows()
                     ]
 
-            LAST_CHART_DATA = chart_meta
+            if unified_contract and isinstance(unified_contract, dict) and unified_contract.get("data_points"):
+                LAST_CHART_DATA = unified_contract
+            else:
+                LAST_CHART_DATA = chart_meta
         except Exception:
             pass
 
