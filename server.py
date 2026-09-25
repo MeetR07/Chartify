@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import sys
 import time
 import base64
@@ -24,15 +25,25 @@ if hasattr(sys.stderr, "reconfigure"):
     except Exception:
         pass
 
-import charts
+import backend.charts as charts
 import main
-from profiler import profile_dataset, get_dataset_schema, clear_profile_cache
-from planner import LLMQueryPlanner, PlanValidator, check_column_ambiguity, RuleBasedFallbackPlanner
-from engine import DeterministicDataEngine, ResultValidator
-from chart_planner import ChartPlanner, build_unified_data_contract
+from backend.profiler import profile_dataset, get_dataset_schema, clear_profile_cache
+from backend.planner import LLMQueryPlanner, PlanValidator, check_column_ambiguity, check_missing_column, RuleBasedFallbackPlanner
+from backend.engine import DeterministicDataEngine, ResultValidator
+from backend.chart_planner import ChartPlanner, build_unified_data_contract
 
-# Multi-turn / Follow-up session store
-SESSION_STORE: Dict[str, Dict[str, Any]] = {}
+ACTIVE_DATASET_PATH = os.path.join(os.path.dirname(__file__), "active_dataset.csv")
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB limit to prevent DoS / Memory Exhaustion
+
+# If active_dataset.csv exists on startup, initialize main.df with it
+if os.path.exists(ACTIVE_DATASET_PATH):
+    try:
+        main.df = pd.read_csv(ACTIVE_DATASET_PATH)
+        clear_profile_cache()
+        profile_dataset(main.df)
+    except Exception as e:
+        print(f"Failed to load active_dataset.csv on startup: {e}")
+
 
 def get_chart_data_url(filename: str) -> str:
     """Reads image file and converts to Base64 Data URI so browser displays it in-memory without HTTP request (completely prevents any auto-download)."""
@@ -49,9 +60,20 @@ def get_chart_data_url(filename: str) -> str:
 app = FastAPI(title="AI Data Visualization Agent API", version="1.0.0")
 
 # Enable CORS for React frontend (Vite defaults to localhost:5173)
+DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+env_origins = os.environ.get("ALLOWED_ORIGINS")
+ALLOWED_ORIGINS = [o.strip() for o in env_origins.split(",") if o.strip()] if env_origins else DEFAULT_ALLOWED_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -98,14 +120,14 @@ class ScalableLRUCache:
         self.ttl = ttl_seconds
         self.lock = threading.Lock()
 
-    def get(self, key):
+    def get(self, key, default=None):
         with self.lock:
             if key not in self.cache:
-                return None
+                return default
             if time.time() - self.timestamps.get(key, 0) > self.ttl:
                 del self.cache[key]
                 self.timestamps.pop(key, None)
-                return None
+                return default
             self.cache.move_to_end(key)
             return self.cache[key]
 
@@ -139,9 +161,12 @@ class ScalableLRUCache:
 # Thread-safe scalable cache (500 items capacity, 1 hour TTL)
 LLM_CACHE = ScalableLRUCache(maxsize=500, ttl_seconds=3600)
 
+# Multi-turn / Follow-up session store (bounded LRU with 1000 sessions capacity, 2 hours TTL)
+SESSION_STORE = ScalableLRUCache(maxsize=1000, ttl_seconds=7200)
+
 # Thread-safe synchronization lock for Matplotlib figure canvas
 RENDER_LOCK = threading.Lock()
-CHARTS_CACHE_DIR = os.path.join(os.getcwd(), "generated_charts")
+CHARTS_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_charts")
 os.makedirs(CHARTS_CACHE_DIR, exist_ok=True)
 LATEST_CHART_BYTES = None
 LATEST_CHART_FILENAME = "chart.png"
@@ -247,7 +272,12 @@ async def upload_csv(file: UploadFile = File(...)):
     """Upload a new CSV file. Returns full dataset metadata so the frontend
     does NOT need a separate /api/dataset call after upload."""
     try:
-        contents = await file.read()
+        contents = await file.read(MAX_UPLOAD_SIZE + 1)
+        if len(contents) > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded file exceeds the maximum allowed size of {MAX_UPLOAD_SIZE // (1024 * 1024)}MB."
+            )
         try:
             new_df = pd.read_csv(io.BytesIO(contents))
         except UnicodeDecodeError:
@@ -257,6 +287,11 @@ async def upload_csv(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="Uploaded CSV file is empty.")
 
         main.df = new_df
+        try:
+            new_df.to_csv(ACTIVE_DATASET_PATH, index=False)
+        except Exception as save_err:
+            print(f"Failed to persist {ACTIVE_DATASET_PATH}: {save_err}")
+
         clear_profile_cache()
         LLM_CACHE.clear()
         SESSION_STORE.clear()
@@ -267,6 +302,28 @@ async def upload_csv(file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read CSV: {str(e)}")
+
+
+@app.post("/api/reset-dataset")
+async def reset_dataset():
+    """Resets dataset to default retail data and clears active_dataset.csv."""
+    default_df = pd.DataFrame({
+        "Month": ["Jan", "Feb", "Mar", "Apr", "May"],
+        "Sales": [15000, 22000, 18000, 27000, 31000],
+        "Profit": [3000, 4500, -1200, 6000, 7500],
+        "Region": ["North", "South", "North", "West", "South"]
+    })
+    main.df = default_df
+    if os.path.exists(ACTIVE_DATASET_PATH):
+        try:
+            os.remove(ACTIVE_DATASET_PATH)
+        except Exception:
+            pass
+    clear_profile_cache()
+    LLM_CACHE.clear()
+    SESSION_STORE.clear()
+    profile_dataset(default_df)
+    return build_dataset_payload(default_df, filename="retail_sales_default.csv")
 
 
 def build_plan_from_args(args: dict, df: pd.DataFrame, schema: dict, query: str = "") -> dict:
@@ -294,8 +351,8 @@ def build_plan_from_args(args: dict, df: pd.DataFrame, schema: dict, query: str 
                 return col
         return c_str if c_str in cols else None
 
-    x_col = resolve_col(x)
-    y_col = resolve_col(y)
+    x_col = resolve_col(x) or (str(x).strip() if x else None)
+    y_col = resolve_col(y) or (str(y).strip() if y else None)
 
     # 1. Distribution / Histogram
     if chart_t == "histogram" or any(w in clean_q for w in ["distribution", "histogram", "spread"]):
@@ -357,9 +414,22 @@ def build_plan_from_args(args: dict, df: pd.DataFrame, schema: dict, query: str 
         sort_col = dim_col if is_temporal else measure_col
         sort_dir = "asc" if is_temporal else "desc"
         chart_type_final = chart_t if chart_t in [
-            "bar", "column", "vertical_bar", "horizontal_bar", "line", "area", "pie", "donut", 
-            "box", "violin", "treemap", "funnel", "waterfall", "lollipop", "radar"
+            "bar", "column", "vertical_bar", "horizontal_bar", "grouped_bar", "stacked_bar",
+            "line", "multi_line", "area", "pie", "donut", "doughnut", "scatter", "histogram", "hist",
+            "box", "violin", "treemap", "funnel", "waterfall", "lollipop", "radar", "spider",
+            "heatmap", "correlation", "bubble", "pairplot", "kpi"
         ] else ("line" if is_temporal else "bar")
+
+        if chart_type_final in ["box", "violin"]:
+            return {
+                "intent": "distribution",
+                "steps": [],
+                "filters": [],
+                "sort": None,
+                "limit": None,
+                "chart_request": {"explicit": True, "type": chart_type_final},
+                "explanation": title or f"Distribution of {measure_col} across {dim_col}"
+            }
 
         return {
             "intent": "time_series" if is_temporal else "aggregation",
@@ -380,6 +450,21 @@ def build_plan_from_args(args: dict, df: pd.DataFrame, schema: dict, query: str 
     single_col = x_col or y_col
     if single_col:
         if single_col in measures:
+            if chart_t in ["kpi", "card", "metric"] or any(w in clean_q for w in ["kpi", "metric", "stat card", "total count", "overall"]):
+                return {
+                    "intent": "single_metric",
+                    "steps": [{
+                        "operation": "group_aggregate",
+                        "group_by": [],
+                        "target_column": single_col,
+                        "aggregation": "sum"
+                    }],
+                    "filters": [],
+                    "sort": None,
+                    "limit": 1,
+                    "chart_request": {"explicit": True, "type": "kpi"},
+                    "explanation": title or f"Total {single_col}"
+                }
             direction = "asc" if any(w in clean_q for w in ["lowest", "bottom", "smallest", "min"]) else "desc"
             return {
                 "intent": "ranking",
@@ -438,7 +523,8 @@ async def generate_chart_endpoint(req: QueryRequest):
         schema = get_dataset_schema(current_df)
 
         # 0. Cache Lookup
-        cache_key = f"{req.query.strip().lower()}_{req.style or 'whitegrid'}_{req.palette or 'deep'}_{getattr(req, 'orientation', 'auto') or 'auto'}"
+        dataset_fp = schema.get("dataset_fingerprint", "default")
+        cache_key = f"{dataset_fp}_{req.query.strip().lower()}_{req.style or 'whitegrid'}_{req.palette or 'deep'}_{getattr(req, 'orientation', 'auto') or 'auto'}"
         cached_res = LLM_CACHE.get(cache_key)
         if cached_res:
             res_copy = dict(cached_res)
@@ -457,6 +543,17 @@ async def generate_chart_endpoint(req: QueryRequest):
                 "ambiguity_type": "column",
                 "options": candidates,
                 "message": ambig_msg
+            }
+
+        # 1.5 Missing Column Detection
+        is_missing, missing_col, missing_msg = check_missing_column(req.query, schema)
+        if is_missing:
+            return {
+                "success": False,
+                "clarification_needed": True,
+                "ambiguity_type": "missing_column",
+                "missing_column": missing_col,
+                "message": missing_msg
             }
 
         plan = None
@@ -527,17 +624,13 @@ async def generate_chart_endpoint(req: QueryRequest):
         # 5. Plan Validation (Multi-layer pre-execution)
         is_valid_plan, plan_err, fix_info = PlanValidator.validate_plan(plan, schema)
         if not is_valid_plan:
-            fb_plan = build_plan_from_args({}, current_df, schema, req.query)
-            is_valid_plan, plan_err, fix_info = PlanValidator.validate_plan(fb_plan, schema)
-            if is_valid_plan:
-                plan = fb_plan
-            else:
-                return {
-                    "success": False,
-                    "validation_error": True,
-                    "message": plan_err or "Invalid query plan.",
-                    "fix_info": fix_info
-                }
+            return {
+                "success": False,
+                "clarification_needed": True,
+                "validation_error": True,
+                "message": plan_err or "Invalid query plan against current dataset.",
+                "fix_info": fix_info
+            }
 
         # 6. Deterministic Data Engine Execution (Zero code execution)
         result_df, exec_meta = DeterministicDataEngine.execute_plan(current_df, plan)
@@ -639,17 +732,85 @@ async def apply_style_endpoint(req: Dict[str, Any]):
         args["palette"] = args.get("palette") or "deep"
         args["output_path"] = ":memory:"
         
+        CHART_TYPE_ALIASES = {
+            "trend": "line",
+            "boxplot": "box",
+            "box_plot": "box",
+            "scatterplot": "scatter",
+            "scatter_plot": "scatter",
+            "hist": "histogram",
+            "doughnut": "donut",
+            "tree_map": "treemap",
+            "tree": "treemap",
+            "heat_map": "heatmap",
+            "correlation": "heatmap",
+            "spider": "radar",
+            "radar_chart": "radar",
+            "vertical_bar": "column",
+            "horizontal_bar": "bar",
+            "stat_card": "kpi",
+            "metric": "kpi",
+            "card": "kpi"
+        }
+
+        original_requested_ct = args.get("chart_type") or "chart"
+        raw_ct = str(original_requested_ct).lower()
+        args["chart_type"] = CHART_TYPE_ALIASES.get(raw_ct, raw_ct)
+
+        contract = (
+            args.get("unified_contract")
+            or args.get("chart_data")
+            or req.get("unified_contract")
+            or req.get("chart_data")
+        )
+        if not contract:
+            last_cd = charts.get_last_chart_data()
+            if last_cd and isinstance(last_cd, dict):
+                last_ct = last_cd.get("chart_type")
+                canon_last_ct = CHART_TYPE_ALIASES.get(str(last_ct).lower(), str(last_ct).lower()) if last_ct else None
+                # Only use last_cd if caller didn't specify a specific chart_type or last_cd has the same chart_type
+                if raw_ct in ["chart", "data_analysis_chart", "auto", ""] or canon_last_ct == args["chart_type"]:
+                    contract = last_cd
+
+        if contract and isinstance(contract, dict):
+            args["unified_contract"] = contract
+            # Preserve exact chart_type, columns, and title from contract to prevent data/layout drift
+            contract_ct = contract.get("chart_type")
+            if contract_ct:
+                canon_contract_ct = CHART_TYPE_ALIASES.get(str(contract_ct).lower(), str(contract_ct).lower())
+                # Adhere strictly to contract to guarantee Surprise Me NEVER converts pie to bar or mutates chart type
+                if raw_ct in ["chart", "data_analysis_chart", "auto", ""]:
+                    args["chart_type"] = canon_contract_ct
+                elif canon_contract_ct in ["pie", "donut", "treemap", "radar", "heatmap", "funnel", "waterfall", "lollipop", "box", "violin", "kpi", "pairplot"] and args["chart_type"] in ["bar", "column", "chart"]:
+                    args["chart_type"] = canon_contract_ct
+                elif canon_contract_ct != args["chart_type"] and raw_ct in ["chart", "data_analysis_chart", "auto", ""]:
+                    args["chart_type"] = canon_contract_ct
+
+            if not args.get("x_col") and contract.get("x_col"):
+                args["x_col"] = contract["x_col"]
+            if not args.get("y_col") and contract.get("y_col"):
+                args["y_col"] = contract["y_col"]
+            if (not args.get("title") or args.get("title") == "Data Analysis Chart") and contract.get("title"):
+                args["title"] = contract["title"]
+
         # Restyle chart purely in-memory in a non-blocking worker thread
         data_url = await asyncio.to_thread(render_chart_safe, args)
-        if isinstance(data_url, str) and data_url.startswith("Error generating"):
+        if isinstance(data_url, str) and (data_url.startswith("Error generating") or data_url.startswith("Error:")):
             raise HTTPException(status_code=400, detail=data_url)
+
+        # Return original requested chart type name if it was a valid alias of canonical type, otherwise canonical
+        ret_chart_type = (
+            original_requested_ct 
+            if CHART_TYPE_ALIASES.get(str(original_requested_ct).lower(), str(original_requested_ct).lower()) == args["chart_type"] 
+            else args.get("chart_type", "chart")
+        )
 
         return {
             "success": True,
-            "chart_type": args.get("chart_type", "chart"),
+            "chart_type": ret_chart_type,
             "chart_url": data_url,
             "tool_args": args,
-            "chart_data": charts.get_last_chart_data(),
+            "chart_data": contract if (contract and isinstance(contract, dict)) else charts.get_last_chart_data(),
             "result": "Restyled in-memory"
         }
     except HTTPException:
@@ -699,15 +860,48 @@ async def summarize_chart_endpoint(req: SummarizeRequest):
 @app.get("/api/charts/{filename}")
 def get_chart_image(filename: str):
     """Returns the generated PNG image strictly for inline display (never auto-downloads)."""
-    file_path = os.path.join(os.getcwd(), filename)
-    if not os.path.exists(file_path):
+    # Guard against directory traversal, encoded paths, and hidden files
+    raw_name = filename.strip().replace('\\', '/')
+    if ".." in raw_name or raw_name.startswith("/") or raw_name.startswith("."):
         raise HTTPException(status_code=404, detail="Chart image not found.")
+
+    base_fn = os.path.basename(raw_name)
+    if not (base_fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) and not base_fn.startswith(".")):
+        raise HTTPException(status_code=404, detail="Chart image not found.")
+
+    # Check CHARTS_CACHE_DIR first, then root working directory for legacy chart files
+    file_path = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, base_fn))
+    charts_dir_real = os.path.realpath(CHARTS_CACHE_DIR)
+    root_dir_real = os.path.realpath(os.getcwd())
+
+    if file_path.startswith(charts_dir_real) and os.path.exists(file_path):
+        target_path = file_path
+    else:
+        root_path = os.path.realpath(os.path.join(os.getcwd(), base_fn))
+        if root_path.startswith(root_dir_real) and os.path.exists(root_path):
+            target_path = root_path
+        else:
+            raise HTTPException(status_code=404, detail="Chart image not found.")
+
     return FileResponse(
-        file_path,
+        target_path,
         media_type="image/png",
         content_disposition_type="inline",
         headers={"Content-Disposition": "inline"}
     )
+
+
+def sanitize_export_filename(filename: Optional[str]) -> str:
+    """Sanitizes export filename to prevent directory traversal and arbitrary file write."""
+    raw = (filename or "chart.png").strip().replace('\\', '/')
+    base = os.path.basename(raw)
+    base = re.sub(r"[^\w\.-]", "_", base)
+    base = base.lstrip(".")
+    if not base or base.lower() == "png":
+        base = "chart"
+    if not base.lower().endswith(".png"):
+        base += ".png"
+    return base
 
 
 class ExportRequest(BaseModel):
@@ -730,9 +924,7 @@ def export_png_endpoint(req: ExportRequest):
         if not img_bytes:
             raise HTTPException(status_code=404, detail="No chart image available to export.")
 
-        safe_fn = (req.filename or LATEST_CHART_FILENAME or "chart.png").replace('"', '').strip()
-        if not safe_fn.endswith(".png"):
-            safe_fn += ".png"
+        safe_fn = sanitize_export_filename(req.filename or LATEST_CHART_FILENAME or "chart.png")
 
         return Response(
             content=img_bytes,
@@ -756,9 +948,7 @@ def download_latest_chart_endpoint(filename: Optional[str] = None):
     if not LATEST_CHART_BYTES:
         raise HTTPException(status_code=404, detail="No chart generated yet to download.")
 
-    safe_fn = (filename or LATEST_CHART_FILENAME or "chart.png").replace('"', '').strip()
-    if not safe_fn.endswith(".png"):
-        safe_fn += ".png"
+    safe_fn = sanitize_export_filename(filename or LATEST_CHART_FILENAME or "chart.png")
 
     return Response(
         content=LATEST_CHART_BYTES,
@@ -775,12 +965,18 @@ def download_latest_chart_endpoint(filename: Optional[str] = None):
 def download_chart_by_filename_endpoint(filename: str):
     """Direct URL download with exact filename ending in .png (ensures browser never uses UUID)."""
     global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
-    safe_fn = filename.strip().replace('"', '')
-    if not safe_fn.endswith(".png"):
-        safe_fn += ".png"
-    filepath = os.path.join(CHARTS_CACHE_DIR, safe_fn)
-    latest_path = os.path.join(CHARTS_CACHE_DIR, "latest.png")
-    
+    raw_name = filename.strip().replace('\\', '/')
+    if ".." in raw_name or "/" in raw_name or raw_name.startswith("."):
+        raise HTTPException(status_code=404, detail="Chart not found")
+
+    safe_fn = sanitize_export_filename(filename)
+    filepath = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, safe_fn))
+    latest_path = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, "latest.png"))
+    charts_dir_real = os.path.realpath(CHARTS_CACHE_DIR)
+
+    if not filepath.startswith(charts_dir_real):
+        raise HTTPException(status_code=404, detail="Chart not found")
+
     target_path = filepath if os.path.exists(filepath) else (latest_path if os.path.exists(latest_path) else None)
     if target_path:
         return FileResponse(
@@ -816,11 +1012,12 @@ def save_chart_endpoint(req: ExportRequest):
         if not img_bytes:
             raise HTTPException(status_code=400, detail="No image data provided")
         
-        safe_fn = (req.filename or "chart.png").strip().replace('"', '')
-        if not safe_fn.endswith(".png"):
-            safe_fn += ".png"
-            
-        filepath = os.path.join(CHARTS_CACHE_DIR, safe_fn)
+        safe_fn = sanitize_export_filename(req.filename)
+        charts_dir_real = os.path.realpath(CHARTS_CACHE_DIR)
+        filepath = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, safe_fn))
+        if not filepath.startswith(charts_dir_real):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         with open(filepath, "wb") as f:
             f.write(img_bytes)
         with open(os.path.join(CHARTS_CACHE_DIR, "latest.png"), "wb") as f:
@@ -847,19 +1044,24 @@ def export_directly_to_user_downloads(req: ExportRequest):
         if not img_bytes:
             raise HTTPException(status_code=400, detail="No image data provided to export.")
         
-        safe_fn = (req.filename or "chart.png").strip().replace('"', '')
-        if not safe_fn.endswith(".png"):
-            safe_fn += ".png"
-            
+        safe_fn = sanitize_export_filename(req.filename)
+        
         # 1. Save directly into OS Downloads folder (C:\Users\<user>\Downloads)
-        user_downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        user_downloads_dir = os.path.realpath(os.path.join(os.path.expanduser("~"), "Downloads"))
         os.makedirs(user_downloads_dir, exist_ok=True)
-        downloads_target_path = os.path.join(user_downloads_dir, safe_fn)
+        downloads_target_path = os.path.realpath(os.path.join(user_downloads_dir, safe_fn))
+        if not downloads_target_path.startswith(user_downloads_dir):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         with open(downloads_target_path, "wb") as f:
             f.write(img_bytes)
             
         # 2. Also save into project generated_charts folder
-        cache_path = os.path.join(CHARTS_CACHE_DIR, safe_fn)
+        charts_dir_real = os.path.realpath(CHARTS_CACHE_DIR)
+        cache_path = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, safe_fn))
+        if not cache_path.startswith(charts_dir_real):
+            raise HTTPException(status_code=400, detail="Invalid filename")
+
         with open(cache_path, "wb") as f:
             f.write(img_bytes)
         with open(os.path.join(CHARTS_CACHE_DIR, "latest.png"), "wb") as f:

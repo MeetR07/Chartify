@@ -25,12 +25,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Scratch & temporary
-restore_css.py
-frontend/restore_css.py
-
 # Temporary generated chart files
+generated_charts/
 *.png
+
+# Runtime dataset (user-uploaded, not source-controlled)
+active_dataset.csv
+
+# Pytest cache
+.pytest_cache/
 
 # IDE / OS
 .vscode/

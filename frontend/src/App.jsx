@@ -189,21 +189,26 @@ export default function App() {
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  // Fetch current dataset metadata only if not already restored from localStorage
+  // Fetch current dataset metadata from backend to always keep frontend and backend in sync
   const fetchDataset = async () => {
     try {
-      const saved = localStorage.getItem('chartify_dataset');
-      if (saved) {
-        return;
-      }
       const res = await fetch(`${API_BASE}/api/dataset`);
       if (res.ok) {
         const data = await res.json();
-        setDataset(data);
+        if (data && Array.isArray(data.columns) && data.columns.length > 0) {
+          setDataset(data);
+          return;
+        }
       }
     } catch (err) {
-      console.error('Failed to fetch dataset:', err);
+      console.warn('Backend dataset fetch failed, falling back to cached dataset:', err);
     }
+    try {
+      const saved = localStorage.getItem('chartify_dataset');
+      if (saved) {
+        setDataset(JSON.parse(saved));
+      }
+    } catch (_) {}
   };
 
   useEffect(() => {
@@ -364,36 +369,46 @@ export default function App() {
     setQuery('');
   };
 
-  // Dynamic Style & Palette updater with instant visual feedback
+  // Dynamic Style & Palette updater with instant visual feedback and unified contract support
   const applyStyleAndPalette = async (style, palette) => {
     setSelectedStyle(style);
     setSelectedPalette(palette);
 
-    if (activeChart && activeChart.args) {
+    if (activeChart) {
       setIsRestyling(true);
+
+      const baseArgs = activeChart.args || {
+        chart_type: activeChart.chart_type,
+        title: activeChart.title,
+        query: activeChart.query
+      };
 
       try {
         const res = await fetch(`${API_BASE}/api/apply-style`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            ...activeChart.args,
+            ...baseArgs,
+            chart_type: activeChart.chart_type || baseArgs.chart_type,
+            title: activeChart.title || baseArgs.title,
+            unified_contract: activeChart.chart_data,
+            chart_data: activeChart.chart_data,
             style: style,
             palette: palette
           })
         });
         const data = await res.json();
         if (res.ok && data.success) {
-          const preservedChartData = (data.chart_data && Object.keys(data.chart_data).length > 0)
-            ? data.chart_data
-            : activeChart.chart_data;
+          // Strictly preserve activeChart.chart_data so underlying data, indicators,
+          // axes, series, matrix, and layout configuration are NEVER mutated or regenerated
           const updatedChart = {
             ...activeChart,
             url: data.chart_url,
-            chart_data: preservedChartData,
+            chart_data: activeChart.chart_data,
             args: {
-              ...activeChart.args,
-              ...data.tool_args,
+              ...baseArgs,
+              chart_type: activeChart.chart_type || baseArgs.chart_type,
+              title: activeChart.title || baseArgs.title,
               style: style,
               palette: palette
             }
@@ -434,7 +449,7 @@ export default function App() {
     applyStyleAndPalette(selectedStyle, newPalette);
   };
 
-  // Surprise Me / Roll Vibe: Strictly randomizes the color palette and theme of the current chart (NEVER changes chart type or query)
+  // Roll Vibe (Aesthetics Studio): Strictly randomizes the color palette and theme of the current chart
   const handleRandomStyle = () => {
     if (isRestyling) return;
 
@@ -451,8 +466,28 @@ export default function App() {
     applyStyleAndPalette(randomStyle, randomPalette);
   };
 
-  // Surprise Me on canvas toolbar strictly randomizes the color palette & theme of the chart
-  const handleSurpriseMe = handleRandomStyle;
+  // Surprise Me (Canvas Toolbar):
+  // Updates ONLY the color/theme state and re-renders the existing chart with the new colors
+  // — without touching or regenerating the underlying data, indicators, axes, or any other chart configuration.
+  // Color-palette logic is completely isolated from chart-generation logic.
+  const handleSurpriseMe = () => {
+    if (loading || isRestyling) return;
+
+    // Pick random palette from PALETTES (excluding current and 'custom')
+    const otherPalettes = PALETTES.filter((p) => p.id !== selectedPalette && p.id !== 'custom');
+    const randomPalette = otherPalettes.length
+      ? otherPalettes[Math.floor(Math.random() * otherPalettes.length)].id
+      : PALETTES[0].id;
+
+    // Pick random aesthetic style
+    const otherStyles = THEME_STYLES.filter((s) => s.id !== selectedStyle);
+    const randomStyle = otherStyles.length
+      ? otherStyles[Math.floor(Math.random() * otherStyles.length)].id
+      : THEME_STYLES[0].id;
+
+    // Strictly apply color/theme state without touching or regenerating chart configuration
+    applyStyleAndPalette(randomStyle, randomPalette);
+  };
 
   // Download Chart PNG (Dual Bulletproof Export: Direct Python save + Windows Explorer open + Browser download)
   const handleDownload = (e) => {
@@ -472,7 +507,7 @@ export default function App() {
     const url = activeChart.url;
 
     // 1. Direct Python Backend Save -> writes to C:\Users\admin\Downloads & highlights in Windows Explorer
-    fetch('/api/export-to-downloads', {
+    fetch(`${API_BASE}/api/export-to-downloads`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image_data: url, filename: filename })
@@ -489,7 +524,7 @@ export default function App() {
     try {
       const link = document.createElement('a');
       link.download = filename;
-      link.href = url.startsWith('data:') ? url : `/api/charts/download/${encodeURIComponent(filename)}`;
+      link.href = url.startsWith('data:') ? url : `${API_BASE}/api/charts/download/${encodeURIComponent(filename)}`;
       document.body.appendChild(link);
       link.click();
       setTimeout(() => {

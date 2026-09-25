@@ -7,15 +7,16 @@ import numpy as np
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from profiler import profile_dataset, robust_date_detection
-from planner import (
+from backend.profiler import profile_dataset, robust_date_detection
+from backend.planner import (
     check_column_ambiguity,
+    check_missing_column,
     RuleBasedFallbackPlanner,
     PlanValidator,
     LLMQueryPlanner
 )
-from engine import DeterministicDataEngine, ResultValidator, compute_data_signature
-from chart_planner import ChartPlanner, build_unified_data_contract
+from backend.engine import DeterministicDataEngine, ResultValidator, compute_data_signature
+from backend.chart_planner import ChartPlanner, build_unified_data_contract
 
 
 class TestNL2ChartUniversalEngine(unittest.TestCase):
@@ -227,6 +228,31 @@ class TestNL2ChartUniversalEngine(unittest.TestCase):
         res_df, exec_meta = DeterministicDataEngine.execute_plan(self.retail_df, plan)
         chart_type, _ = ChartPlanner.select_and_validate_chart(res_df, plan, exec_meta)
         self.assertEqual(chart_type, "column")
+
+    def test_missing_column_gender_detection(self):
+        """Query: 'create a pie chart of gender' on dataset without gender flags missing column"""
+        plan, _ = LLMQueryPlanner.generate_plan("create a pie chart of gender", self.retail_df)
+        self.assertTrue(plan.get("clarification_needed", False))
+        self.assertEqual(plan.get("ambiguity_type"), "missing_column")
+        self.assertEqual(plan.get("missing_column"), "gender")
+        self.assertIn("gender", plan.get("message", ""))
+        self.assertIn("Month", plan.get("message", ""))
+
+    def test_missing_column_preserves_valid_columns(self):
+        """Query: 'pie chart of sales' on retail dataset does NOT flag sales as missing"""
+        schema = profile_dataset(self.retail_df)
+        is_missing, col, msg = check_missing_column("pie chart of sales", schema)
+        self.assertFalse(is_missing)
+
+    def test_missing_column_when_column_actually_present(self):
+        """Query: 'create a pie chart of gender' on dataset WITH gender does NOT flag missing"""
+        df_with_gender = pd.DataFrame({
+            "gender": ["Male", "Female", "Other"],
+            "count": [100, 120, 15]
+        })
+        schema = profile_dataset(df_with_gender)
+        is_missing, col, msg = check_missing_column("create a pie chart of gender", schema)
+        self.assertFalse(is_missing)
 
 
 if __name__ == "__main__":

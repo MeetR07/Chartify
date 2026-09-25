@@ -1,3 +1,4 @@
+import os
 import sys
 import pandas as pd
 from dotenv import load_dotenv
@@ -20,19 +21,32 @@ load_dotenv()
 # 1. CORE DATASET
 # ==============================================================================
 
-df = pd.DataFrame({
-    "Month": ["Jan", "Feb", "Mar", "Apr", "May"],
-    "Sales": [15000, 22000, 18000, 27000, 31000],
-    "Profit": [3000, 4500, -1200, 6000, 7500],
-    "Region": ["North", "South", "North", "West", "South"]
-})
+ACTIVE_DATASET_PATH = os.path.join(os.path.dirname(__file__), "active_dataset.csv")
+
+if os.path.exists(ACTIVE_DATASET_PATH):
+    try:
+        df = pd.read_csv(ACTIVE_DATASET_PATH)
+    except Exception:
+        df = pd.DataFrame({
+            "Month": ["Jan", "Feb", "Mar", "Apr", "May"],
+            "Sales": [15000, 22000, 18000, 27000, 31000],
+            "Profit": [3000, 4500, -1200, 6000, 7500],
+            "Region": ["North", "South", "North", "West", "South"]
+        })
+else:
+    df = pd.DataFrame({
+        "Month": ["Jan", "Feb", "Mar", "Apr", "May"],
+        "Sales": [15000, 22000, 18000, 27000, 31000],
+        "Profit": [3000, 4500, -1200, 6000, 7500],
+        "Region": ["North", "South", "North", "West", "South"]
+    })
 
 # ==============================================================================
 # 2. MODULAR RE-EXPORTS (100% Backward Compatibility with server.py and existing code)
 # ==============================================================================
 
-from charts import generate_chart, smart_preprocess_data
-from agent import (
+from backend.charts import generate_chart, smart_preprocess_data
+from backend.agent import (
     invoke_ai_with_fallbacks,
     heuristic_chart_extractor,
     chart_chain,
