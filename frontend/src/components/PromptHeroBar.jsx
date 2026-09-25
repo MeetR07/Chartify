@@ -38,7 +38,11 @@ export default function PromptHeroBar({
 
   const activeLabel = selectedChartType
     ? `${selectedChartType.toUpperCase()} CHART`
-    : 'ALL CHARTS (AUTO)';
+    : (
+        <>
+          ALL CHARTS <span className="hide-on-mobile">(AUTO)</span>
+        </>
+      );
 
   return (
     <div className="prompt-bar-wrapper">

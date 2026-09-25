@@ -3687,6 +3687,9 @@ html, body {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .hide-on-mobile {
+    display: none;
+  }
   .prompt-badge-sparkle, .select-chevron {
     width: 10px;
     height: 10px;
