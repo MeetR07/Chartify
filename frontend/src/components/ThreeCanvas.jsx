@@ -1497,15 +1497,17 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
     build3DScatter(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, false, chartData, allRows);
   } else if (['pie', 'donut', 'doughnut'].some(t => chartType.includes(t))) {
     build3DPieDonut(chartGroup, dataPoints, chartType.includes('donut') || chartType.includes('doughnut'), wireframe, interactiveList, paletteColors, showLabels, isDark, chartData);
-  } else if (['line', 'area', 'trend'].some(t => chartType.includes(t))) {
-    build3DLineArea(chartGroup, dataPoints, maxVal, maxHeight, chartType.includes('area'), wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol);
+  } else if (['line', 'area', 'trend', 'multi_line'].some(t => chartType.includes(t))) {
+    build3DLineArea(chartGroup, dataPoints, maxVal, maxHeight, chartType.includes('area'), wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, chartData);
   } else if (['heatmap', 'correlation'].some(t => chartType.includes(t))) {
     build3DHeatmap(chartGroup, chartData, allRows, numCols, wireframe, interactiveList, paletteColors, showLabels, isDark);
   } else if (['treemap', 'tree'].some(t => chartType.includes(t))) {
     build3DTreemap(chartGroup, dataPoints, maxVal, wireframe, interactiveList, paletteColors, showLabels, isDark, chartData);
+  } else if (['kpi', 'metric', 'stat_card', 'card'].some(t => chartType.includes(t))) {
+    build3DCard(chartGroup, activeChart, wireframe, interactiveList, accentColor, isDark, bgTheme);
   } else {
-    // Bar and other fallbacks
-    build3DBar(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, false);
+    // Bar, grouped_bar, stacked_bar and other fallbacks
+    build3DBar(chartGroup, dataPoints, maxVal, maxHeight, wireframe, interactiveList, paletteColors, accentColor, showLabels, isDark, effXCol, effYCol, false, chartData, chartType);
   }
 }
 
@@ -1667,6 +1669,46 @@ function build3DCard(group, activeChart, wireframe, interactiveList, accentColor
   frontMesh.position.z = depth / 2 + 0.012;
   cardGroup.add(frontMesh);
 
+  // Render KPI directly from contract data_points
+  const chartData = activeChart?.chart_data;
+  if (chartData?.data_points && chartData.data_points.length > 0) {
+    const p0 = chartData.data_points[0];
+    const val = p0.val;
+    const label = p0.label || chartData.axis_metadata?.y_label || 'Key Metric';
+    const sym = chartData.axis_metadata?.currency_symbol || (chartData.axis_metadata?.currency === 'INR' ? '₹' : (chartData.axis_metadata?.currency === 'USD' ? '$' : ''));
+    const isCurrency = chartData.axis_metadata?.format === 'currency';
+    const formattedVal = (isCurrency ? sym : '') + formatDataValue(val);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 640;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = isDark ? '#0f172a' : '#ffffff';
+    ctx.fillRect(0, 0, 1024, 640);
+    // Accent bar
+    ctx.fillStyle = typeof accentColor === 'number' ? `#${accentColor.toString(16).padStart(6, '0')}` : (accentColor || '#08ab9c');
+    ctx.fillRect(80, 70, 864, 12);
+    // Label
+    ctx.fillStyle = isDark ? '#94a3b8' : '#64748b';
+    ctx.font = 'bold 36px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(label).toUpperCase(), 512, 180);
+    // Large KPI Value
+    ctx.fillStyle = isDark ? '#ffffff' : '#0f172a';
+    ctx.font = 'bold 88px sans-serif';
+    ctx.fillText(formattedVal, 512, 330);
+    // Subtitle
+    ctx.fillStyle = isDark ? '#64748b' : '#94a3b8';
+    ctx.font = '24px sans-serif';
+    const sub = chartData.query || `Dataset Metric Summary • ${chartData.data_points.length} item(s)`;
+    ctx.fillText(sub, 512, 440);
+
+    const kpiTex = new THREE.CanvasTexture(canvas);
+    kpiTex.colorSpace = THREE.SRGBColorSpace;
+    frontMat.map = kpiTex;
+    frontMat.needsUpdate = true;
+  }
+
   // Load 2D chart image texture and dynamically adapt aspect ratio
   if (activeChart?.url) {
     const loader = new THREE.TextureLoader();
@@ -1767,7 +1809,9 @@ function build3DBar(
   isDark = true,
   xLabel = 'Month',
   yLabel = 'Sales',
-  hasBackdrop = false
+  hasBackdrop = false,
+  chartData = null,
+  chartType = 'bar'
 ) {
   const count = data.length;
   // Calculate dynamic spacing and width
@@ -1823,6 +1867,148 @@ function build3DBar(
   group.add(new THREE.Line(glowGeo, glowMat));
 
   // 2. Render each Beveled Column & Floating Badge
+  const isStacked = chartType.includes('stacked') && chartData?.series && chartData.series.length > 1;
+  const isGrouped = chartType.includes('grouped') && chartData?.series && chartData.series.length > 1;
+
+  if (isStacked) {
+    const seriesList = chartData.series;
+    const cats = (chartData.axis_metadata?.x_categories && chartData.axis_metadata.x_categories.length > 0)
+      ? chartData.axis_metadata.x_categories
+      : data.map(d => d.label);
+    const nCats = cats.length;
+    const spacingS = nCats <= 5 ? 2.3 : Math.max(14 / nCats, 1.4);
+    const startXS = -((nCats - 1) * spacingS) / 2;
+    const barWidthS = nCats <= 5 ? 1.45 : Math.min(spacingS * 0.65, 1.4);
+    const barDepthS = barWidthS;
+
+    const totals = cats.map((_, i) =>
+      seriesList.reduce((acc, s) => acc + (parseFloat(s.data?.[i]) || 0), 0)
+    );
+    const maxTotal = Math.max(...totals, 1);
+
+    cats.forEach((catLabel, i) => {
+      const barX = startXS + i * spacingS;
+      let currentY = 0;
+
+      seriesList.forEach((s, sIdx) => {
+        const val = parseFloat(s.data?.[i]) || 0;
+        const sliceRatio = val / maxTotal;
+        const sliceHeight = Math.max(sliceRatio * maxHeight, 0.08);
+        const sColor = colorsToUse[sIdx % colorsToUse.length];
+
+        const geom = createBeveledBarGeometry(barWidthS, sliceHeight, barDepthS, 0.04);
+        const mat = new THREE.MeshPhysicalMaterial({
+          color: sColor,
+          metalness: 0.12,
+          roughness: 0.18,
+          clearcoat: 0.7,
+          wireframe: wireframe
+        });
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.set(barX, currentY, 0);
+        mesh.castShadow = true;
+        mesh.userData = { label: `${s.name}: ${catLabel}`, val: formatDataValue(val) };
+        group.add(mesh);
+        interactiveList.push(mesh);
+
+        currentY += sliceHeight;
+      });
+
+      if (showLabels && totals[i] > 0) {
+        const badge = createFloatingValueBadge(totals[i], colorsToUse[0]);
+        badge.position.set(barX, currentY + 0.72, 0);
+        group.add(badge);
+      }
+
+      const catSprite = createCategoryLabelSprite(catLabel, true);
+      catSprite.position.set(barX, -0.42, maxZ + 0.22);
+      group.add(catSprite);
+
+      const puddleGeo = new THREE.CylinderGeometry(barWidthS * 0.65, barWidthS * 0.8, 0.02, 24);
+      const puddleMat = new THREE.MeshBasicMaterial({ color: colorsToUse[0], transparent: true, opacity: 0.28 });
+      const puddle = new THREE.Mesh(puddleGeo, puddleMat);
+      puddle.position.set(barX, 0.01, 0);
+      group.add(puddle);
+    });
+
+    const xTitle = String(xLabel || chartData.axis_metadata?.x_label || 'Category').trim();
+    const xTitleSprite = createAxisTitleSprite(xTitle, false);
+    xTitleSprite.position.set((minX + maxX) / 2, -1.05, maxZ + 0.75);
+    group.add(xTitleSprite);
+    return;
+  }
+
+  if (isGrouped) {
+    const seriesList = chartData.series;
+    const cats = (chartData.axis_metadata?.x_categories && chartData.axis_metadata.x_categories.length > 0)
+      ? chartData.axis_metadata.x_categories
+      : data.map(d => d.label);
+    const nCats = cats.length;
+    const nSeries = seriesList.length;
+    const spacingG = nCats <= 5 ? 2.5 : Math.max(16 / nCats, 1.6);
+    const startXG = -((nCats - 1) * spacingG) / 2;
+    const totalGroupWidth = nCats <= 5 ? 1.6 : Math.min(spacingG * 0.75, 1.6);
+    const subBarWidth = (totalGroupWidth * 0.9) / nSeries;
+    const barDepthG = subBarWidth * 1.2;
+
+    let allSeriesMax = 1;
+    seriesList.forEach(s => {
+      (s.data || []).forEach(v => {
+        if (v !== null && v !== undefined && !isNaN(v)) {
+          allSeriesMax = Math.max(allSeriesMax, parseFloat(v));
+        }
+      });
+    });
+
+    cats.forEach((catLabel, i) => {
+      const barX = startXG + i * spacingG;
+
+      seriesList.forEach((s, sIdx) => {
+        const val = parseFloat(s.data?.[i]) || 0;
+        const subRatio = allSeriesMax > 0 ? (val / allSeriesMax) : 0.5;
+        const height = Math.max(subRatio * maxHeight, 0.4);
+        const sColor = colorsToUse[sIdx % colorsToUse.length];
+        const subX = barX + (sIdx - (nSeries - 1) / 2) * subBarWidth;
+
+        const geom = createBeveledBarGeometry(subBarWidth * 0.88, height, barDepthG, 0.04);
+        const mat = new THREE.MeshPhysicalMaterial({
+          color: sColor,
+          metalness: 0.12,
+          roughness: 0.18,
+          clearcoat: 0.7,
+          wireframe: wireframe
+        });
+        const mesh = new THREE.Mesh(geom, mat);
+        mesh.position.set(subX, 0, 0);
+        mesh.castShadow = true;
+        mesh.userData = { label: `${s.name}: ${catLabel}`, val: formatDataValue(val) };
+        group.add(mesh);
+        interactiveList.push(mesh);
+
+        if (showLabels && nCats <= 6) {
+          const badge = createFloatingValueBadge(val, sColor);
+          badge.position.set(subX, height + 0.65, 0);
+          group.add(badge);
+        }
+      });
+
+      const catSprite = createCategoryLabelSprite(catLabel, true);
+      catSprite.position.set(barX, -0.42, maxZ + 0.22);
+      group.add(catSprite);
+
+      const puddleGeo = new THREE.CylinderGeometry(totalGroupWidth * 0.5, totalGroupWidth * 0.6, 0.02, 24);
+      const puddleMat = new THREE.MeshBasicMaterial({ color: colorsToUse[0], transparent: true, opacity: 0.2 });
+      const puddle = new THREE.Mesh(puddleGeo, puddleMat);
+      puddle.position.set(barX, 0.01, 0);
+      group.add(puddle);
+    });
+
+    const xTitle = String(xLabel || chartData.axis_metadata?.x_label || 'Category').trim();
+    const xTitleSprite = createAxisTitleSprite(xTitle, false);
+    xTitleSprite.position.set((minX + maxX) / 2, -1.05, maxZ + 0.75);
+    group.add(xTitleSprite);
+    return;
+  }
   data.forEach((d, i) => {
     const rawRatio = maxVal > 0 ? (d.val / maxVal) : 0.5;
     const height = Math.max(rawRatio * maxHeight, 0.5);
@@ -2475,8 +2661,133 @@ function build3DLineArea(
   showLabels = true,
   isDark = false,
   effXCol = 'Month',
-  effYCol = 'Sales'
+  effYCol = 'Sales',
+  chartData = null
 ) {
+  const isMultiSeries = chartData?.series && chartData.series.length > 1;
+  if (isMultiSeries) {
+    const seriesList = chartData.series;
+    const xCategories = (chartData.axis_metadata?.x_categories && chartData.axis_metadata.x_categories.length > 0)
+      ? chartData.axis_metadata.x_categories
+      : data.map(d => d.label);
+    const countM = xCategories.length;
+    const spacingM = countM <= 6 ? 2.3 : Math.max(14 / countM, 1.4);
+    const startXM = -((countM - 1) * spacingM) / 2;
+
+    const colorsToUseM = (paletteColors && paletteColors.length && paletteColors !== PALETTE_MAP.butter_green)
+      ? paletteColors
+      : CYBER_3D_PALETTE;
+
+    let allSeriesMax = 1;
+    seriesList.forEach(s => {
+      (s.data || []).forEach(v => {
+        if (v !== null && v !== undefined && !isNaN(v)) {
+          allSeriesMax = Math.max(allSeriesMax, parseFloat(v));
+        }
+      });
+    });
+
+    const seriesSpacing = 1.6;
+    const startZM = -((seriesList.length - 1) * seriesSpacing) / 2;
+    const maxZM = startZM + (seriesList.length - 1) * seriesSpacing + 0.6;
+    const minZM = startZM - 0.6;
+    const padXM = spacingM * 0.75;
+    const minXM = startXM - padXM;
+    const maxXM = (startXM + (countM - 1) * spacingM) + padXM;
+
+    // Floor perimeter frame
+    const framePoints = [
+      new THREE.Vector3(minXM, 0.02, minZM),
+      new THREE.Vector3(maxXM, 0.02, minZM),
+      new THREE.Vector3(maxXM, 0.02, maxZM),
+      new THREE.Vector3(minXM, 0.02, maxZM),
+      new THREE.Vector3(minXM, 0.02, minZM)
+    ];
+    group.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(framePoints),
+      new THREE.LineBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.85, linewidth: 2 })
+    ));
+
+    seriesList.forEach((s, sIdx) => {
+      const sColor = colorsToUseM[sIdx % colorsToUseM.length];
+      const zPos = startZM + sIdx * seriesSpacing;
+      const sPoints = [];
+
+      (s.data || []).forEach((valRaw, i) => {
+        if (i >= countM) return;
+        const val = valRaw !== null && valRaw !== undefined ? parseFloat(valRaw) : 0;
+        const rawRatio = allSeriesMax > 0 ? (val / allSeriesMax) : 0.5;
+        const height = Math.max(rawRatio * maxHeight, 0.6);
+        const posX = startXM + i * spacingM;
+        const pt = new THREE.Vector3(posX, height, zPos);
+        sPoints.push(pt);
+
+        // Marker sphere
+        const sphereGeo = new THREE.SphereGeometry(0.32, 20, 20);
+        const sphereMat = new THREE.MeshPhysicalMaterial({
+          color: sColor,
+          metalness: 0.15,
+          roughness: 0.15,
+          clearcoat: 0.8,
+          reflectivity: 0.6,
+          wireframe: wireframe
+        });
+        const sphere = new THREE.Mesh(sphereGeo, sphereMat);
+        sphere.position.copy(pt);
+        sphere.castShadow = true;
+        sphere.userData = { label: `${s.name}: ${xCategories[i]}`, val: formatDataValue(val) };
+        group.add(sphere);
+        interactiveList.push(sphere);
+
+        // Value badge
+        if (showLabels && (sIdx === 0 || countM <= 6)) {
+          const labelSprite = createFloatingValueBadge(val, sColor);
+          labelSprite.position.set(pt.x, height + 0.68, pt.z);
+          group.add(labelSprite);
+        }
+
+        // Drop line
+        const dropLineGeo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(pt.x, 0.02, pt.z),
+          new THREE.Vector3(pt.x, height, pt.z)
+        ]);
+        group.add(new THREE.Line(dropLineGeo, new THREE.LineBasicMaterial({ color: sColor, transparent: true, opacity: 0.5, linewidth: 1 })));
+      });
+
+      // Tube curve
+      if (sPoints.length >= 2) {
+        const curve = new THREE.CatmullRomCurve3(sPoints);
+        const tubeGeo = new THREE.TubeGeometry(curve, 60, 0.18, 14, false);
+        const tubeMat = new THREE.MeshPhysicalMaterial({
+          color: sColor,
+          metalness: 0.2,
+          roughness: 0.18,
+          clearcoat: 0.75,
+          reflectivity: 0.6,
+          wireframe: wireframe
+        });
+        const tube = new THREE.Mesh(tubeGeo, tubeMat);
+        tube.castShadow = true;
+        group.add(tube);
+      }
+    });
+
+    // X-Axis Category Labels
+    xCategories.forEach((catName, i) => {
+      const posX = startXM + i * spacingM;
+      const catSprite = createCategoryLabelSprite(catName, isDark);
+      catSprite.position.set(posX, -0.42, maxZM + 0.28);
+      group.add(catSprite);
+    });
+
+    // X-Axis Title
+    const xTitle = String(effXCol || chartData.axis_metadata?.x_label || 'Category').trim();
+    const xTitleSprite = createAxisTitleSprite(xTitle, false);
+    xTitleSprite.position.set((minXM + maxXM) / 2, -1.05, maxZM + 0.8);
+    group.add(xTitleSprite);
+
+    return;
+  }
   const count = data.length;
   const spacing = count <= 6 ? 2.3 : Math.max(14 / count, 1.4);
   const startX = -((count - 1) * spacing) / 2;
@@ -2719,7 +3030,25 @@ function build3DHeatmap(
   let rows = [];
   let matrix = [];
 
-  if (chartData?.matrix && chartData.matrix.length > 0) {
+  if (chartData?.matrix?.values && Array.isArray(chartData.matrix.values)) {
+    columns = chartData.matrix.x_labels || chartData.columns || [];
+    rows = chartData.matrix.y_labels || chartData.rows || [];
+    matrix = [];
+    rows.forEach((rName, rIdx) => {
+      const rowVals = chartData.matrix.values[rIdx] || [];
+      columns.forEach((cName, cIdx) => {
+        const raw = rowVals[cIdx];
+        const val = raw !== null && raw !== undefined ? parseFloat(raw) : 0;
+        matrix.push({
+          row: String(rName),
+          col: String(cName),
+          row_idx: rIdx,
+          col_idx: cIdx,
+          val: isNaN(val) ? 0 : val
+        });
+      });
+    });
+  } else if (Array.isArray(chartData?.matrix) && chartData.matrix.length > 0) {
     // 100% exact match from backend Python corr() computation
     columns = chartData.columns || [];
     rows = chartData.rows || [];
