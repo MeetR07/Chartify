@@ -11,7 +11,7 @@ except ImportError:
     fuzz = None
     HAS_RAPIDFUZZ = False
 
-from profiler import get_dataset_schema
+from .profiler import get_dataset_schema
 
 logger = logging.getLogger("chartify.planner")
 if not logger.handlers:
@@ -95,6 +95,106 @@ def check_column_ambiguity(query: str, schema: Dict[str, Any]) -> Tuple[bool, Li
     return False, [], None
 
 
+# Common chart vocabulary and filler words that should not be flagged as missing columns
+CHART_STOPWORDS = {
+    # Chart types & visual terms
+    "chart", "charts", "plot", "plots", "graph", "graphs", "diagram", "diagrams", "table", "tables",
+    "card", "cards", "pie", "donut", "doughnut", "bar", "bars", "column", "columns", "line", "lines",
+    "scatter", "histogram", "hist", "treemap", "heatmap", "box", "boxplot", "violin", "funnel",
+    "waterfall", "radar", "spider", "bubble", "pairplot", "kpi", "metric", "stat", "view", "views",
+    "visual", "visualization", "visualize", "distribution", "spread", "breakdown", "frequency",
+    # Actions & verbs
+    "create", "make", "generate", "draw", "give", "show", "display", "build", "render",
+    "see", "want", "need", "like", "put", "use", "using", "look", "tell", "find",
+    # Aggregations & math
+    "count", "counts", "total", "totals", "sum", "sums", "average", "avg", "mean", "max", "maximum",
+    "min", "minimum", "percentage", "percent", "pct", "share", "proportion", "ratio",
+    "highest", "lowest", "top", "bottom", "most", "least", "ranked", "ranking",
+    # Prepositions, conjunctions, and fillers
+    "a", "an", "the", "of", "by", "in", "on", "at", "to", "for", "from", "with", "into", "as",
+    "is", "are", "was", "were", "and", "or", "vs", "versus", "against", "across", "per", "each",
+    "every", "all", "some", "any", "me", "my", "our", "us", "you", "your", "please", "can", "could",
+    "would", "should", "will", "data", "dataset", "dataframe", "record", "records", "row", "rows",
+    "value", "values", "item", "items", "horizontal", "vertical", "upright", "standing", "orientation",
+    "format", "type", "style", "palette", "colored", "color", "colors", "colour", "colours", "based",
+    "annotation", "annotations", "annotated", "annot", "regression", "trendline", "trendlines",
+    "labels", "label", "percentiles", "summary", "overview", "matrix", "proportions", "proportion",
+    "correlation", "correlations", "correlate", "features", "feature", "variables", "variable"
+}
+
+
+def check_missing_column(query: str, schema: Dict[str, Any]) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    Evaluates whether the user's query explicitly requests a column or dimension
+    that does NOT exist in the active dataset schema.
+    Returns (is_missing, missing_column_name, clarification_message).
+    """
+    clean_q = query.lower().strip()
+    columns = schema.get("columns", [])
+    if not columns:
+        return False, None, None
+
+    def matches_existing_col(target: str) -> bool:
+        t_clean = target.lower().strip()
+        t_stem = t_clean[:-1] if t_clean.endswith("s") and len(t_clean) > 3 else t_clean
+        for col in columns:
+            c_clean = col.lower().strip()
+            c_words = [w.strip() for w in re.split(r"[^\w]+", c_clean) if w.strip()]
+            c_stems = [w[:-1] if w.endswith("s") and len(w) > 3 else w for w in c_words]
+            if t_clean == c_clean or t_clean in c_words or t_stem in c_stems:
+                return True
+            if t_clean.replace(" ", "_") == c_clean or t_clean.replace("_", " ") == c_clean:
+                return True
+            if token_similarity(t_clean, c_clean) >= 0.75:
+                return True
+        return False
+
+    # 1. Check prepositional target patterns: "of <col>", "by <col>", "per <col>", "across <col>", "for <col>", "in <col>"
+    prep_matches = re.finditer(r"\b(?:of|by|per|across|for|in|on)\s+([a-zA-Z0-9_]+(?:\s+[a-zA-Z0-9_]+)?)", clean_q)
+    for m in prep_matches:
+        candidate = m.group(1).strip()
+        words = candidate.split()
+        filtered_words = [w for w in words if w not in CHART_STOPWORDS and len(w) >= 2]
+        if not filtered_words:
+            continue
+        target_candidate = "_".join(filtered_words) if len(filtered_words) > 1 else filtered_words[0]
+        if target_candidate in CHART_STOPWORDS:
+            continue
+        if not matches_existing_col(target_candidate) and not any(matches_existing_col(w) for w in filtered_words):
+            cols_fmt = ", ".join(f"'{c}'" for c in columns)
+            msg = (
+                f"Column '{target_candidate}' was not found in the active dataset. "
+                f"Available columns are: {cols_fmt}. "
+                f"Please select from the available columns or upload a dataset containing '{target_candidate}'."
+            )
+            logger.info(f"[MISSING COLUMN DETECTED] Explicit column '{target_candidate}' not found in {columns}")
+            return True, target_candidate, msg
+
+    # 2. Check explicit entity / noun phrases remaining after stripping stopwords
+    tokens = [t for t in re.split(r"[^\w]+", clean_q) if len(t) >= 3 and t not in CHART_STOPWORDS]
+    missing_tokens = []
+    has_any_col_match = False
+    for t in tokens:
+        if matches_existing_col(t):
+            has_any_col_match = True
+        else:
+            missing_tokens.append(t)
+
+    # If user specifically wrote an entity like "gender" (e.g. "gender pie chart") with no column match
+    if missing_tokens and not has_any_col_match:
+        target = missing_tokens[0]
+        cols_fmt = ", ".join(f"'{c}'" for c in columns)
+        msg = (
+            f"Column '{target}' was not found in the active dataset. "
+            f"Available columns are: {cols_fmt}. "
+            f"Please select from the available columns or upload a dataset containing '{target}'."
+        )
+        logger.info(f"[MISSING COLUMN DETECTED] Unmatched entity '{target}' not found in {columns}")
+        return True, target, msg
+
+    return False, None, None
+
+
 class PlanValidator:
     """Multi-layer pre-execution validation for structured QueryPlans."""
 
@@ -120,15 +220,14 @@ class PlanValidator:
 
             # Validate target_column existence
             if target_col and target_col not in valid_cols:
-                # Suggest closest column
-                closest = max(valid_cols, key=lambda c: token_similarity(target_col, c))
-                return False, f"Column '{target_col}' does not exist in dataset.", {"suggested_fix": closest}
+                suggested_fix = {"suggested_fix": max(valid_cols, key=lambda c: token_similarity(target_col, c))} if valid_cols else None
+                return False, f"Column '{target_col}' does not exist in dataset.", suggested_fix
 
             # Validate group_by columns
             for g_col in group_by:
                 if g_col not in valid_cols:
-                    closest = max(valid_cols, key=lambda c: token_similarity(g_col, c))
-                    return False, f"Grouping column '{g_col}' does not exist in dataset.", {"suggested_fix": closest}
+                    suggested_fix = {"suggested_fix": max(valid_cols, key=lambda c: token_similarity(g_col, c))} if valid_cols else None
+                    return False, f"Grouping column '{g_col}' does not exist in dataset.", suggested_fix
 
             # Validate aggregation compatibility
             if op in ["group_aggregate", "groupby"] and agg in ["sum", "avg", "mean", "min", "max"]:
@@ -142,8 +241,8 @@ class PlanValidator:
         for f in filters:
             f_col = f.get("column")
             if f_col and f_col not in valid_cols:
-                closest = max(valid_cols, key=lambda c: token_similarity(f_col, c))
-                return False, f"Filter column '{f_col}' does not exist in dataset.", {"suggested_fix": closest}
+                suggested_fix = {"suggested_fix": max(valid_cols, key=lambda c: token_similarity(f_col, c))} if valid_cols else None
+                return False, f"Filter column '{f_col}' does not exist in dataset.", suggested_fix
 
         # Check sort
         sort_info = plan.get("sort")
@@ -193,14 +292,42 @@ class RuleBasedFallbackPlanner:
             explicit_chart = {"explicit": True, "type": "column"}
         elif any(w in clean_q for w in ["horizontal bar", "horizontal"]):
             explicit_chart = {"explicit": True, "type": "horizontal_bar"}
-        elif "pie" in clean_q:
+        elif any(w in clean_q for w in ["box plot", "boxplot", "box chart", "box"]):
+            explicit_chart = {"explicit": True, "type": "box"}
+        elif any(w in clean_q for w in ["violin plot", "violin chart", "violin"]):
+            explicit_chart = {"explicit": True, "type": "violin"}
+        elif any(w in clean_q for w in ["treemap", "tree map"]):
+            explicit_chart = {"explicit": True, "type": "treemap"}
+        elif any(w in clean_q for w in ["waterfall", "water fall"]):
+            explicit_chart = {"explicit": True, "type": "waterfall"}
+        elif any(w in clean_q for w in ["funnel chart", "funnel"]):
+            explicit_chart = {"explicit": True, "type": "funnel"}
+        elif any(w in clean_q for w in ["lollipop chart", "lollipop"]):
+            explicit_chart = {"explicit": True, "type": "lollipop"}
+        elif any(w in clean_q for w in ["radar chart", "radar", "spider chart", "spider"]):
+            explicit_chart = {"explicit": True, "type": "radar"}
+        elif any(w in clean_q for w in ["bubble chart", "bubble"]):
+            explicit_chart = {"explicit": True, "type": "bubble"}
+        elif any(w in clean_q for w in ["area chart", "area"]):
+            explicit_chart = {"explicit": True, "type": "area"}
+        elif any(w in clean_q for w in ["heatmap", "heat map", "correlation"]):
+            explicit_chart = {"explicit": True, "type": "heatmap"}
+        elif any(w in clean_q for w in ["pairplot", "pair plot", "scatter matrix"]):
+            explicit_chart = {"explicit": True, "type": "pairplot"}
+        elif any(w in clean_q for w in ["histogram", "hist"]):
+            explicit_chart = {"explicit": True, "type": "histogram"}
+        elif any(w in clean_q for w in ["pie", "pie chart"]):
             explicit_chart = {"explicit": True, "type": "pie"}
-        elif "donut" in clean_q:
+        elif any(w in clean_q for w in ["donut", "doughnut"]):
             explicit_chart = {"explicit": True, "type": "donut"}
-        elif "scatter" in clean_q:
+        elif any(w in clean_q for w in ["scatter", "scatter plot"]):
             explicit_chart = {"explicit": True, "type": "scatter"}
-        elif "line" in clean_q:
+        elif any(w in clean_q for w in ["multi line", "multi_line", "multiple lines"]):
+            explicit_chart = {"explicit": True, "type": "multi_line"}
+        elif any(w in clean_q for w in ["line chart", "line"]):
             explicit_chart = {"explicit": True, "type": "line"}
+        elif any(w in clean_q for w in ["kpi", "metric", "stat card", "card"]):
+            explicit_chart = {"explicit": True, "type": "kpi"}
 
         # Template 1: Top-N Ranking ("top 10 cities by revenue", "top 5 models by price")
         top_n_match = re.search(r"\btop\s+(\d+)\s+([a-zA-Z0-9_\s]+?)\s+(?:by|with highest|for)\s+([a-zA-Z0-9_\s]+)", clean_q)
@@ -267,7 +394,7 @@ class RuleBasedFallbackPlanner:
                 }
 
         # Template 4: Measure by Dimension ("total sales by month", "profit per region", "average salary across department")
-        by_match = re.search(r"(?:total|sum|average|avg|mean|max|min|count)?\s*([a-zA-Z0-9_\s]+?)\s+(?:by|per|across|for each)\s+([a-zA-Z0-9_\s]+)", clean_q)
+        by_match = re.search(r"(?:total|sum|average|avg|mean|max|min|count)?\s*([a-zA-Z0-9_\s]+?)\s+(?:by|per|across|for each|over|vs|versus)\s+([a-zA-Z0-9_\s]+)", clean_q)
         if by_match:
             measure_text = by_match.group(1).strip()
             dim_text = by_match.group(2).strip()
@@ -284,6 +411,10 @@ class RuleBasedFallbackPlanner:
 
             dim_col = find_col(dim_text, dimensions) or find_col(dim_text, columns)
             measure_col = find_col(measure_text, measures) or find_col(measure_text, columns)
+
+            # If user phrased as dimension vs measure (e.g. "customer_segment vs customer_acquisition_cost")
+            if dim_col in measures and measure_col in dimensions:
+                dim_col, measure_col = measure_col, dim_col
 
             if dim_col:
                 # If no measure found but query has "count" or "how many"
@@ -304,9 +435,21 @@ class RuleBasedFallbackPlanner:
                     }
 
                 if measure_col and dim_col != measure_col:
+                    if explicit_chart and explicit_chart["type"] in ["box", "violin"]:
+                        return {
+                            "intent": "distribution",
+                            "steps": [],
+                            "filters": [],
+                            "sort": None,
+                            "limit": None,
+                            "chart_request": explicit_chart,
+                            "primary_group_col": dim_col,
+                            "primary_metric_col": measure_col,
+                            "explanation": f"Distribution of {measure_col} by {dim_col}"
+                        }
                     is_temporal = dim_col in schema.get("candidate_dates", []) or any(t in dim_col.lower() for t in ["month", "year", "date", "quarter", "day"])
                     sort_spec = {"column": dim_col, "direction": "asc"} if is_temporal else {"column": measure_col, "direction": "desc"}
-                    chart_t = "line" if is_temporal else "bar"
+                    chart_t = explicit_chart["type"] if explicit_chart else ("line" if is_temporal else "bar")
                     intent_str = "time_series" if is_temporal else "aggregation"
                     return {
                         "intent": intent_str,
@@ -349,6 +492,52 @@ class RuleBasedFallbackPlanner:
                     "explanation": f"Count of {target_col or 'items'} grouped by {dim_col}"
                 }
 
+        # Template 6: Breakdown / Proportions / Pie / Donut
+        breakdown_match = re.search(r"\b(breakdown|proportions?|share|composition|parts?)\s+of\s+([a-zA-Z0-9_\s]+)", clean_q)
+        if breakdown_match or (any(w in clean_q for w in ["pie", "donut", "doughnut"]) and (" of " in clean_q or " across " in clean_q or " breakdown" in clean_q or " proportions" in clean_q)):
+            text_target = breakdown_match.group(2).strip() if breakdown_match else clean_q
+            dim_col = find_col(text_target, dimensions) or find_col(text_target, columns)
+            if dim_col:
+                c_type = "donut" if "donut" in clean_q or "doughnut" in clean_q else "pie"
+                return {
+                    "intent": "aggregation",
+                    "steps": [{
+                        "operation": "group_aggregate",
+                        "group_by": [dim_col],
+                        "target_column": None,
+                        "aggregation": "count"
+                    }],
+                    "filters": [],
+                    "sort": {"column": "count", "direction": "desc"},
+                    "limit": 10,
+                    "chart_request": {"explicit": True, "type": c_type},
+                    "explanation": f"Breakdown of {dim_col} by proportion"
+                }
+
+        # Template 7: Pairplot / Scatter Matrix
+        if any(w in clean_q for w in ["pairplot", "scatter matrix", "pair plot", "pairs"]):
+            return {
+                "intent": "distribution",
+                "steps": [],
+                "filters": [],
+                "sort": None,
+                "limit": None,
+                "chart_request": {"explicit": True, "type": "pairplot"},
+                "explanation": "Multi-variable pairplot distribution"
+            }
+
+        # Template 8: Heatmap / Correlation
+        if any(w in clean_q for w in ["correlation", "correlate"]):
+            return {
+                "intent": "correlation",
+                "steps": [],
+                "filters": [],
+                "sort": None,
+                "limit": None,
+                "chart_request": {"explicit": True, "type": "heatmap"},
+                "explanation": "Correlation matrix heatmap of numeric features"
+            }
+
         return None
 
 
@@ -382,6 +571,16 @@ class LLMQueryPlanner:
                 "ambiguity_type": "column",
                 "options": candidates,
                 "message": ambig_msg
+            }, None
+
+        # 1.5 Missing Column Detection
+        is_missing, missing_col, missing_msg = check_missing_column(query, schema)
+        if is_missing:
+            return {
+                "clarification_needed": True,
+                "ambiguity_type": "missing_column",
+                "missing_column": missing_col,
+                "message": missing_msg
             }, None
 
         # 2. Multi-turn Follow-Up Merge

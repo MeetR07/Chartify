@@ -50,8 +50,15 @@ except ImportError:
     ChatGroq = None
     HAS_GROQ = False
 
+try:
+    from langchain_nvidia_ai_endpoints import ChatNVIDIA
+    HAS_NVIDIA = True
+except ImportError:
+    ChatNVIDIA = None
+    HAS_NVIDIA = False
+
 import re
-from charts import generate_chart, detect_query_intent
+from .charts import generate_chart, detect_query_intent
 
 # Ensure UTF-8 output on Windows to prevent UnicodeEncodeError
 for stream in (sys.stdout, sys.stderr):
@@ -94,6 +101,16 @@ GROQ_MODELS = [
     "llama-3.3-70b-versatile",
     "llama-3.1-8b-instant",
     "llama3-8b-8192",
+]
+
+OPENROUTER_MODELS = [
+    "anthropic/claude-3.5-sonnet",
+    "meta-llama/llama-3.3-70b-instruct",
+]
+
+NVIDIA_MODELS = [
+    "meta/llama-3.1-70b-instruct",
+    "nvidia/llama-3.1-nemotron-70b-instruct",
 ]
 
 # FreeLLMAPI routing model names (smart auto-routing across 34 providers)
@@ -144,24 +161,50 @@ CHART_PATTERNS = [
 ]
 
 
+from typing import Literal, Optional, Dict, Any, List
+from langchain_core.tools import tool
+
+@tool
+def generate_chart_llm_tool(
+    chart_type: str = "bar",
+    x_col: str = "",
+    y_col: str = "",
+    hue_col: str = "",
+    title: str = "Data Analysis Chart",
+    palette: str = "deep",
+    style: str = "whitegrid"
+) -> str:
+    """Generates a data visualization chart.
+    Args:
+        chart_type: The chart visualization type.
+        x_col: Category or X-axis column name from dataset.
+        y_col: Numeric measure or Y-axis column name from dataset.
+        hue_col: Optional grouping category.
+        title: Descriptive chart title.
+        palette: Theme palette name.
+        style: Background style ('whitegrid', 'darkgrid', etc.).
+    """
+    return "ok"
+
+
 # ==============================================================================
 # MODEL CHAIN FACTORIES
 # ==============================================================================
 
 def create_model_chain(model_name: str):
-    """Returns a Gemini model bound to the generate_chart tool."""
+    """Returns a Gemini model bound to the chart generation tool schema."""
     llm = ChatGoogleGenerativeAI(
         model=model_name,
         temperature=0,
         google_api_key=os.getenv("GOOGLE_API_KEY"),
         max_retries=0,
-        timeout=8,
+        timeout=15,
     )
-    return llm.bind_tools([generate_chart])
+    return llm.bind_tools([generate_chart_llm_tool])
 
 
 def create_mistral_chain(model_name: str = "ministral-8b-latest"):
-    """Returns a Mistral model bound to the generate_chart tool."""
+    """Returns a Mistral model bound to the chart generation tool schema."""
     llm = ChatMistralAI(
         model=model_name,
         mistral_api_key=os.getenv("MISTRAL_API_KEY"),
@@ -169,11 +212,41 @@ def create_mistral_chain(model_name: str = "ministral-8b-latest"):
         max_retries=0,
         timeout=8,
     )
-    return llm.bind_tools([generate_chart])
+    return llm.bind_tools([generate_chart_llm_tool])
+
+
+def create_openrouter_chain(model_name: str):
+    """Returns an OpenRouter model bound to the chart generation tool schema."""
+    if not HAS_LANGCHAIN_OPENAI or ChatOpenAI is None:
+        return None
+    try:
+        llm = ChatOpenAI(
+            model=model_name,
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            base_url="https://openrouter.ai/api/v1",
+            temperature=0,
+            max_retries=0,
+            timeout=15,
+        )
+        return llm.bind_tools([generate_chart_llm_tool])
+    except Exception:
+        return None
+
+
+def create_nvidia_chain(model_name: str):
+    """Returns an NVIDIA API model bound to the chart generation tool schema."""
+    llm = ChatNVIDIA(
+        model=model_name,
+        nvidia_api_key=os.getenv("NVIDIA_API_KEY"),
+        temperature=0,
+        max_retries=0,
+        timeout=15,
+    )
+    return llm.bind_tools([generate_chart_llm_tool])
 
 
 def create_groq_chain(model_name: str = "llama-3.3-70b-versatile"):
-    """Returns a Groq Llama-3 model bound to the generate_chart tool."""
+    """Returns a Groq Llama-3 model bound to the chart generation tool schema."""
     llm = ChatGroq(
         model=model_name,
         groq_api_key=os.getenv("GROQ_API_KEY"),
@@ -181,7 +254,7 @@ def create_groq_chain(model_name: str = "llama-3.3-70b-versatile"):
         max_retries=0,
         timeout=8,
     )
-    return llm.bind_tools([generate_chart])
+    return llm.bind_tools([generate_chart_llm_tool])
 
 
 def create_freellmapi_chain(model_name: str = "auto"):
@@ -219,6 +292,8 @@ def get_freellmapi_chains():
 # Pre-initialize all chains ONCE at startup so cascade has zero per-request overhead
 _GEMINI_CHAINS      = {m: create_model_chain(m)    for m in CANDIDATE_MODELS} if HAS_GEMINI and ChatGoogleGenerativeAI else {}
 _MISTRAL_CHAINS     = {m: create_mistral_chain(m)  for m in MISTRAL_MODELS} if HAS_MISTRAL and ChatMistralAI else {}
+_OPENROUTER_CHAINS  = {m: c for m in OPENROUTER_MODELS if (c := create_openrouter_chain(m)) is not None} if ChatOpenAI else {}
+_NVIDIA_CHAINS      = {m: create_nvidia_chain(m)   for m in NVIDIA_MODELS} if HAS_NVIDIA and ChatNVIDIA else {}
 _GROQ_CHAINS        = {m: create_groq_chain(m)     for m in GROQ_MODELS} if HAS_GROQ and ChatGroq else {}
 _FREELLMAPI_CHAINS  = get_freellmapi_chains()
 
@@ -417,7 +492,21 @@ def invoke_ai_with_fallbacks(inputs: dict):
         if result:
             return result, label
 
-    # 3. Groq
+    # 3. OpenRouter
+    if os.getenv("OPENROUTER_API_KEY"):
+        _safe_print("[INFO] Falling back to OpenRouter...")
+        result, label = _try_model_cascade(_OPENROUTER_CHAINS, prompt_val, "openrouter")
+        if result:
+            return result, label
+
+    # 4. NVIDIA
+    if os.getenv("NVIDIA_API_KEY"):
+        _safe_print("[INFO] Falling back to NVIDIA NIM...")
+        result, label = _try_model_cascade(_NVIDIA_CHAINS, prompt_val, "nvidia")
+        if result:
+            return result, label
+
+    # 5. Groq
     if os.getenv("GROQ_API_KEY"):
         _safe_print("[INFO] Falling back to Groq Llama-3...")
         result, label = _try_model_cascade(_GROQ_CHAINS, prompt_val, "groq")
@@ -551,9 +640,21 @@ def heuristic_chart_extractor(query: str, current_df: pd.DataFrame) -> dict:
     elif chart_type in ["heatmap", "correlation"]:
         return {"chart_type": "heatmap", "x_col": None, "y_col": None, "title": "Correlation Heatmap", "query": query}
     else:
-        x_col    = cat_cols[0] if cat_cols else (all_cols[0] if all_cols else None)
-        rem_nums = [c for c in num_cols if c != x_col]
-        y_col    = rem_nums[0] if rem_nums else (all_cols[1] if len(all_cols) > 1 else None)
+        # Check if an explicit target was requested (e.g. "pie chart of gender") that does not exist in dataset
+        explicit_target = None
+        target_match = re.search(r"\b(?:of|by|for|per|across|in)\s+([a-zA-Z0-9_]+)", q)
+        if target_match:
+            candidate = target_match.group(1).strip()
+            if candidate not in {"a", "the", "an", "data", "records", "chart", "plot", "pie", "bar", "histogram"}:
+                explicit_target = candidate
+
+        if explicit_target:
+            x_col = explicit_target
+            y_col = None
+        else:
+            x_col    = cat_cols[0] if cat_cols else (all_cols[0] if all_cols else None)
+            rem_nums = [c for c in num_cols if c != x_col]
+            y_col    = rem_nums[0] if rem_nums else (all_cols[1] if len(all_cols) > 1 else None)
 
     if x_col and y_col:
         title = f"{y_col} by {x_col}"
@@ -648,7 +749,7 @@ def summarize_chart_with_llm(chart_result: dict, user_query: str = "", df: pd.Da
     filename = chart_result.get("chart_filename") or f"{chart_type}.png"
 
     # Resolve exact metadata
-    import charts
+    from . import charts
     chart_meta = charts.get_last_chart_data() or chart_result.get("chart_data") or {}
     data_points = chart_meta.get("data_points") or []
     pie_slices = chart_meta.get("pie_slices") or []
@@ -785,7 +886,44 @@ def summarize_chart_with_llm(chart_result: dict, user_query: str = "", df: pd.Da
             except Exception as m_err:
                 _safe_print(f"[WARN] Mistral LLM ({m_model}) error: {m_err}")
 
-    # 6. Tier 4: Statistical Analytical Heuristic (Instant, guaranteed fallback)
+    # 6. Tier 4: OpenRouter
+    if ChatOpenAI and os.getenv("OPENROUTER_API_KEY"):
+        for o_model in ["anthropic/claude-3.5-sonnet", "meta-llama/llama-3.3-70b-instruct"]:
+            try:
+                o_llm = ChatOpenAI(
+                    model=o_model,
+                    api_key=os.getenv("OPENROUTER_API_KEY"),
+                    base_url="https://openrouter.ai/api/v1",
+                    temperature=0.2,
+                    max_retries=0,
+                    timeout=12
+                )
+                res = o_llm.invoke(prompt_text)
+                txt = _extract_llm_text(res.content if res else "")
+                if len(txt) > 20:
+                    return {"summary": txt, "model": f"{o_model} (OpenRouter)"}
+            except Exception as o_err:
+                _safe_print(f"[WARN] OpenRouter LLM ({o_model}) error: {o_err}")
+
+    # 7. Tier 5: NVIDIA
+    if HAS_NVIDIA and ChatNVIDIA and os.getenv("NVIDIA_API_KEY"):
+        for n_model in ["meta/llama-3.1-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"]:
+            try:
+                n_llm = ChatNVIDIA(
+                    model=n_model,
+                    nvidia_api_key=os.getenv("NVIDIA_API_KEY"),
+                    temperature=0.2,
+                    max_retries=0,
+                    timeout=12
+                )
+                res = n_llm.invoke(prompt_text)
+                txt = _extract_llm_text(res.content if res else "")
+                if len(txt) > 20:
+                    return {"summary": txt, "model": f"{n_model} (NVIDIA NIM)"}
+            except Exception as n_err:
+                _safe_print(f"[WARN] NVIDIA LLM ({n_model}) error: {n_err}")
+
+    # 8. Tier 6: Statistical Analytical Heuristic (Instant, guaranteed fallback)
     items = pie_slices or data_points
     if items:
         valid_items = [it for it in items if isinstance(it.get("val"), (int, float))]

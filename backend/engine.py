@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 MONTH_CHRONO_ORDER = [
     "jan", "feb", "mar", "apr", "may", "jun",
     "jul", "aug", "sep", "oct", "nov", "dec",
-    "january", "february", "march", "april", "june",
+    "january", "february", "march", "april", "may", "june",
     "july", "august", "september", "october", "november", "december"
 ]
 
@@ -121,23 +121,44 @@ class DeterministicDataEngine:
                     except (ValueError, TypeError):
                         pass
 
-                if op == "eq":
-                    working_df = working_df[col_s == val]
-                elif op == "neq":
-                    working_df = working_df[col_s != val]
-                elif op == "gt":
-                    working_df = working_df[col_s > val]
-                elif op == "gte":
-                    working_df = working_df[col_s >= val]
-                elif op == "lt":
-                    working_df = working_df[col_s < val]
-                elif op == "lte":
-                    working_df = working_df[col_s <= val]
-                elif op in ["in", "isin"]:
-                    val_list = val if isinstance(val, list) else [val]
-                    working_df = working_df[col_s.isin(val_list)]
-
-                meta["operations_applied"].append(f"filter({col} {op} {val})")
+                try:
+                    if op == "eq":
+                        working_df = working_df[col_s == val]
+                    elif op == "neq":
+                        working_df = working_df[col_s != val]
+                    elif op == "gt":
+                        working_df = working_df[col_s > val]
+                    elif op == "gte":
+                        working_df = working_df[col_s >= val]
+                    elif op == "lt":
+                        working_df = working_df[col_s < val]
+                    elif op == "lte":
+                        working_df = working_df[col_s <= val]
+                    elif op in ["in", "isin"]:
+                        val_list = val if isinstance(val, list) else [val]
+                        working_df = working_df[col_s.isin(val_list)]
+                    meta["operations_applied"].append(f"filter({col} {op} {val})")
+                except (TypeError, ValueError) as err:
+                    applied = False
+                    if op in ["gt", "gte", "lt", "lte"]:
+                        try:
+                            num_col = pd.to_numeric(col_s, errors="coerce")
+                            if num_col.notna().mean() >= 0.5:
+                                num_val = float(val)
+                                if op == "gt":
+                                    working_df = working_df[num_col > num_val]
+                                elif op == "gte":
+                                    working_df = working_df[num_col >= num_val]
+                                elif op == "lt":
+                                    working_df = working_df[num_col < num_val]
+                                elif op == "lte":
+                                    working_df = working_df[num_col <= num_val]
+                                meta["operations_applied"].append(f"filter({col} {op} {val})")
+                                applied = True
+                        except Exception:
+                            pass
+                    if not applied:
+                        meta["warnings"].append(f"Incompatible type for filter({col} {op} {val}): {err}; skipped.")
 
             # Check for 0-row filter match edge case
             if len(working_df) == 0:
@@ -146,8 +167,8 @@ class DeterministicDataEngine:
 
         # Step 2: Execute Core Operations
         steps = plan.get("steps", [])
-        primary_group_col = None
-        primary_metric_col = None
+        primary_group_col = plan.get("primary_group_col")
+        primary_metric_col = plan.get("primary_metric_col")
 
         for step in steps:
             op_name = step.get("operation")
@@ -191,7 +212,8 @@ class DeterministicDataEngine:
                 if agg_func == "count":
                     if target_col and target_col in working_df.columns and target_col not in valid_group_cols:
                         grouped = working_df.groupby(valid_group_cols, as_index=False, observed=True)[target_col].count()
-                        primary_metric_col = target_col
+                        grouped.rename(columns={target_col: "count"}, inplace=True)
+                        primary_metric_col = "count"
                     else:
                         grouped = working_df.groupby(valid_group_cols, as_index=False, observed=True).size()
                         grouped.rename(columns={"size": "count"}, inplace=True)
