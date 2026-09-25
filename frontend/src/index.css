@@ -3675,15 +3675,21 @@ html, body {
     border-radius: 24px;
   }
   .prompt-left-badge {
-    height: 26px;
-    padding: 0 8px;
-    gap: 4px;
+    height: 22px;
+    padding: 0 6px;
+    gap: 3px;
+    border-radius: 6px;
   }
   .prompt-badge-text {
-    font-size: 0.62rem;
-    max-width: 90px;
+    font-size: 0.55rem;
+    max-width: 60px;
+    letter-spacing: -0.3px;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .prompt-badge-sparkle, .select-chevron {
+    width: 10px;
+    height: 10px;
   }
   .prompt-search-icon {
     display: none;
