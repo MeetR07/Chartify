@@ -59,6 +59,7 @@ export const PALETTE_GROUPS = [
       { id: 'pastel', label: 'Pastel', desc: 'Soft Calming Pastels', colors: ['#a1c9f4', '#8de5a1', '#ff9f9b'] },
       { id: 'Set2', label: 'Set2', desc: 'Muted Professional Tones', colors: ['#66c2a5', '#fc8d62', '#8da0cb'] },
       { id: 'colorblind', label: 'Pro Colorblind', desc: 'High-Contrast Accessible', colors: ['#0173b2', '#de8f05', '#029e73'] },
+      { id: 'dark2', label: 'Dark2', desc: 'ColorBrewer Dark — Rich & Distinct', colors: ['#1b9e77', '#d95f02', '#7570b3', '#e7298a', '#66a61e', '#e6ab02'] },
     ]
   }
 ];

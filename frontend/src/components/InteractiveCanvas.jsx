@@ -34,7 +34,7 @@ export default function InteractiveCanvas({
               className="action-btn surprise-btn canvas-surprise-btn"
               onClick={onSurpriseClick}
               disabled={loading || isRestyling}
-              title="Surprise me with a new intelligent visualization and aesthetic theme from this dataset"
+              title="Surprise me with a new color palette and theme styling"
             >
               <Shuffle size={13} className={loading || isRestyling ? 'spin' : ''} />
               <span>🎲 SURPRISE ME</span>
@@ -122,6 +122,7 @@ export default function InteractiveCanvas({
           ) : (
             <div className="active-chart-container">
               <img
+                key={activeChart.id || activeChart.url}
                 src={activeChart.url}
                 alt={activeChart.title || 'Generated AI Chart'}
                 className={`chart-image ${isRestyling ? 'chart-blur' : ''}`}

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Sliders, Layers, Shuffle, Palette, Sparkles, ChevronDown, Check } from 'lucide-react';
 import { THEME_STYLES, PALETTE_GROUPS, PALETTES, QUICK_PRESETS } from '../constants/themeOptions';
+import { getReadableTextColor } from '../utils/colorUtils';
 
 export default function AestheticsStudio({
   selectedStyle,
@@ -169,7 +170,19 @@ export default function AestheticsStudio({
               {currentPaletteObj?.colors.map((c, i) => (
                 <span key={i} className="swatch-bar" style={{ backgroundColor: c }} />
               ))}
-              <span className="palette-swatch-name">{currentPaletteObj?.label}</span>
+              <span
+                className="palette-swatch-name"
+                style={{
+                  color: currentPaletteObj?.colors[0]
+                    ? getReadableTextColor(currentPaletteObj.colors[0])
+                    : undefined,
+                  backgroundColor: currentPaletteObj?.colors[0] || undefined,
+                  padding: currentPaletteObj?.colors[0] ? '1px 6px' : undefined,
+                  borderRadius: currentPaletteObj?.colors[0] ? '4px' : undefined,
+                }}
+              >
+                {currentPaletteObj?.label}
+              </span>
             </span>
           </div>
           <div className="custom-dropdown-container">
@@ -216,8 +229,20 @@ export default function AestheticsStudio({
                                 <span key={i} className="preview-dot" style={{ backgroundColor: c }} />
                               ))}
                             </div>
-                            <div className="item-text-group">
-                              <span className="item-title">{pal.label}</span>
+                          <div className="item-text-group">
+                              <span
+                                className="item-title"
+                                style={{
+                                  color: pal.colors[0]
+                                    ? getReadableTextColor(pal.colors[0])
+                                    : undefined,
+                                  backgroundColor: pal.colors[0] || undefined,
+                                  padding: pal.colors[0] ? '1px 6px' : undefined,
+                                  borderRadius: pal.colors[0] ? '4px' : undefined,
+                                }}
+                              >
+                                {pal.label}
+                              </span>
                               <span className="item-desc">{pal.desc}</span>
                             </div>
                           </div>
