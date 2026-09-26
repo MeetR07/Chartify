@@ -1099,7 +1099,7 @@ body::after {
    ========================================================================== */
 .prompt-bar-wrapper {
   position: relative;
-  border-radius: 9999px;
+  border-radius: 16px;
   background: #ffffff;
   border: 1px solid rgba(1, 62, 55, 0.14);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03);
@@ -1113,16 +1113,29 @@ body::after {
   box-shadow: 0 6px 24px rgba(1, 62, 55, 0.12), 0 0 0 3px rgba(1, 62, 55, 0.08);
 }
 
-.prompt-bar-container {
+.prompt-bar-container.stacked-layout {
   background: transparent;
-  border-radius: 9999px;
-  padding: 6px 8px 6px 8px;
+  border-radius: 16px;
+  padding: 12px 14px 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 52px;
+  height: auto;
+  width: 100%;
+}
+
+.prompt-action-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.prompt-actions-left, .prompt-actions-right {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 52px;
-  height: 52px;
-  width: 100%;
 }
 
 [data-theme="dark"] .prompt-bar-wrapper {
@@ -1210,10 +1223,30 @@ body::after {
   padding: 0;
 }
 
+.prompt-textarea {
+  box-sizing: border-box;
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.5;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  min-height: 38px;
+  max-height: 150px;
+  field-sizing: content;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.prompt-textarea::-webkit-scrollbar {
+  display: none;
+}
+
 .prompt-input::placeholder {
   color: #64748b;
   font-size: 0.88rem;
   font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 [data-theme="dark"] .prompt-input {
@@ -3662,27 +3695,25 @@ html, body {
     gap: 12px;
   }
 
-  /* Mobile Search Bar - Fluid Two-Row / Responsive Card Capsule */
+  /* Mobile Search Bar - Stacked Layout */
   .prompt-bar-wrapper {
-    border-radius: 24px;
+    border-radius: 16px;
   }
-  .prompt-bar-container {
+  .prompt-bar-container.stacked-layout {
     height: auto;
     min-height: 48px;
-    padding: 8px 10px;
-    flex-wrap: wrap;
-    gap: 8px;
-    border-radius: 24px;
+    padding: 8px;
+    border-radius: 16px;
   }
   .prompt-left-badge {
-    height: 22px;
-    padding: 0 6px;
-    gap: 3px;
-    border-radius: 6px;
+    height: 30px;
+    padding: 0 10px;
+    gap: 5px;
+    border-radius: 9999px;
   }
   .prompt-badge-text {
-    font-size: 0.55rem;
-    max-width: 60px;
+    font-size: 0.65rem;
+    max-width: 80px;
     letter-spacing: -0.3px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -3691,36 +3722,37 @@ html, body {
     display: none;
   }
   .prompt-badge-sparkle, .select-chevron {
-    width: 10px;
-    height: 10px;
+    width: 13px;
+    height: 13px;
   }
   .prompt-search-icon {
     display: none;
   }
   .prompt-input {
     min-width: 120px;
-    font-size: 0.82rem;
+    font-size: 0.85rem;
+  }
+  .prompt-textarea {
+    min-height: 24px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    field-sizing: content;
   }
   .prompt-input::placeholder {
-    font-size: 0.78rem;
-    text-overflow: ellipsis;
-  }
-  .prompt-attach-btn {
-    display: none;
+    color: transparent;
   }
   .submit-btn {
-    height: 26px;
-    padding: 0 8px;
-    gap: 4px;
-    margin-left: auto;
-    min-width: 44px;
+    height: 32px;
+    padding: 0 12px;
+    gap: 6px;
+    min-width: 50px;
   }
   .submit-btn-text {
     display: none;
   }
   .submit-btn svg {
-    width: 12px;
-    height: 12px;
+    width: 16px;
+    height: 16px;
   }
 
   /* Toolbar */
