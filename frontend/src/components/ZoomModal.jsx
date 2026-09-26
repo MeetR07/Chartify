@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { X, Download, Columns, Box, Image } from 'lucide-react';
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch';
 import ThreeCanvas from './ThreeCanvas';
 
 export default function ZoomModal({
@@ -144,11 +145,15 @@ export default function ZoomModal({
                   <span className="zoom-modal-pane-tag">PUBLICATION READY</span>
                 </div>
                 <div className="zoom-modal-pane-content modal-image-wrap">
-                  <img
-                    src={activeChart.url}
-                    alt={activeChart.title || 'Fullscreen Chart'}
-                    className="modal-image"
-                  />
+                  <TransformWrapper centerOnInit={true} initialScale={1} minScale={0.5} maxScale={8}>
+                    <TransformComponent wrapperStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <img
+                        src={activeChart.url}
+                        alt={activeChart.title || 'Fullscreen Chart'}
+                        className="modal-image"
+                      />
+                    </TransformComponent>
+                  </TransformWrapper>
                 </div>
               </div>
             </div>
@@ -163,11 +168,15 @@ export default function ZoomModal({
             </div>
           ) : (
             <div className="zoom-modal-single-pane modal-image-wrap">
-              <img
-                src={activeChart.url}
-                alt={activeChart.title || 'Fullscreen Chart'}
-                className="modal-image"
-              />
+              <TransformWrapper centerOnInit={true} initialScale={1} minScale={0.5} maxScale={8}>
+                <TransformComponent wrapperStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <img
+                    src={activeChart.url}
+                    alt={activeChart.title || 'Fullscreen Chart'}
+                    className="modal-image"
+                  />
+                </TransformComponent>
+              </TransformWrapper>
             </div>
           )}
         </div>

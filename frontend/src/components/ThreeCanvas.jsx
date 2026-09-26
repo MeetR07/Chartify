@@ -832,7 +832,7 @@ function ThreeCanvasInner({ activeChart, dataset, selectedPalette, selectedStyle
       TWO: THREE.TOUCH.DOLLY_PAN
     };
     if (displayMode === 'card') {
-      controls.target.set(-0.5, 5.0, 0);
+      controls.target.set(isMobile ? 0 : -0.5, 5.0, 0);
     } else if (isHeatmap) {
       controls.target.set(0, 0.2, 0);
     } else if (isTreemap) {
@@ -881,7 +881,7 @@ function ThreeCanvasInner({ activeChart, dataset, selectedPalette, selectedStyle
 
     // 7. Build 3D Visualization based on Chart Type with Active Palette, Theme Accent & Permanent Data Numbers
     interactiveObjectsRef.current = [];
-    build3DChart(scene, activeChart, dataset, wireframe, interactiveObjectsRef.current, paletteColors, bgTheme.accentColor, showLabels, bgTheme.isDark, displayMode, bgTheme);
+    build3DChart(scene, activeChart, dataset, wireframe, interactiveObjectsRef.current, paletteColors, bgTheme.accentColor, showLabels, bgTheme.isDark, displayMode, bgTheme, isMobile);
 
     // Cute Pet Robot companion in 3D Card Section ONLY (compact & petite beside the 3D card) - Desktop/Tablet only, hidden on mobile
     if (displayMode === 'card' && !isMobile) {
@@ -1380,7 +1380,7 @@ export default function ThreeCanvas(props) {
  * Procedurally generates 3D geometries based on chart type and dataset values using active palette colors and visible data numbers.
  * Also supports mounting 2D charts (like Histograms with KDE) directly onto 3D physical floating cards.
  */
-function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, accentColor = 0x013e37, showLabels = true, isDark = false, displayMode = 'mesh', bgTheme = {}) {
+function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, paletteColors = DEFAULT_PALETTE, accentColor = 0x013e37, showLabels = true, isDark = false, displayMode = 'mesh', bgTheme = {}, isMobile = false) {
   const chartType = (activeChart?.chart_type || 'bar').toLowerCase();
   const isDist = ['histogram', 'hist', 'distribution', 'kde', 'box', 'violin'].some(t => chartType.includes(t));
 
@@ -1390,7 +1390,7 @@ function build3DChart(scene, activeChart, dataset, wireframe, interactiveList, p
 
   // If user explicitly toggled 3D Card mode
   if (displayMode === 'card') {
-    build3DCard(chartGroup, activeChart, wireframe, interactiveList, accentColor, isDark, bgTheme);
+    build3DCard(chartGroup, activeChart, wireframe, interactiveList, accentColor, isDark, bgTheme, isMobile);
     return;
   }
 
@@ -1614,7 +1614,7 @@ function build2DBackdropCard(group, activeChart, wireframe, accentColor, isDark)
  * Elegant, borderless floating glass panel with ambient rim glow and soft floor shadow.
  * Clean, modern presentation without clumsy pedestals or fake screws.
  */
-function build3DCard(group, activeChart, wireframe, interactiveList, accentColor, isDark, bgTheme) {
+function build3DCard(group, activeChart, wireframe, interactiveList, accentColor, isDark, bgTheme, isMobile = false) {
   const cardGroup = new THREE.Group();
   group.add(cardGroup);
 
@@ -1762,12 +1762,12 @@ function build3DCard(group, activeChart, wireframe, interactiveList, accentColor
   });
   const floorShadow = new THREE.Mesh(shadowGeo, shadowMat);
   floorShadow.rotation.x = -Math.PI / 2;
-  floorShadow.position.set(-4.2, 0.02, 0);
+  floorShadow.position.set(isMobile ? 0 : -4.2, 0.02, 0);
   group.add(floorShadow);
 
   // Position floating card gracefully above floor (elevated, no ugly stand!)
   const baseY = initialCardHeight / 2 + 1.4;
-  cardGroup.position.set(-4.2, baseY, 0);
+  cardGroup.position.set(isMobile ? 0 : -4.2, baseY, 0);
   cardGroup.rotation.x = 0;
 
   // Tag for entry animation & smooth levitation

@@ -340,7 +340,7 @@ class ChartPlanner:
         # -- second dimension (hue) --
         explicit_hue = exec_meta.get("hue_col")
         hue_col = explicit_hue if (explicit_hue in cols and explicit_hue not in (group_col, metric_col)) else None
-        if hue_col is None and explicit_hue is None and not exec_meta.get("primary_group_col"):
+        if hue_col is None and not exec_meta.get("primary_group_col"):
             try:
                 group_repeats = result_df[group_col].nunique(dropna=True) < len(result_df)
             except TypeError:
@@ -554,6 +554,11 @@ class ChartPlanner:
                 return switch("bar", f"{rc} plots need raw (un-aggregated) values, at least 5 per group")
             return rc, None
 
+        if rc == "histogram":
+            if not (metric_numeric and (group_col == metric_col or group_col not in result_df.columns)):
+                return switch("bar", "histogram charts need a single numeric distribution (one numeric column as both group and metric)")
+            return rc, None
+
         if rc == "heatmap":
             num_cols = [c for c in result_df.columns if _is_num(result_df[c])]
             if len(num_cols) >= 2 or hue_col is not None:
@@ -595,6 +600,13 @@ class ChartPlanner:
         while chart not in cls.enabled_charts and chart not in seen:
             seen.add(chart)
             chart = _FALLBACK_CHART.get(chart, "bar")
+        # Final safety check: if fallback chain ended on a type not in enabled_charts
+        # (e.g. 'bar' was removed), pick any enabled chart or raise.
+        if chart not in cls.enabled_charts:
+            if cls.enabled_charts:
+                chart = next(iter(cls.enabled_charts))
+            else:
+                raise ValueError(f"No enabled chart types available; cannot render '{original}'.")
         msg = f"{original} charts are not enabled in this deployment, so a {chart} chart was used instead."
         logger.info(f"[CHART CONFLICT] {msg}")
         return chart, (f"{note} {msg}" if note else msg)
@@ -800,11 +812,15 @@ def build_unified_data_contract(
                 total = len(df)
                 ranked = intent == "ranking" or chart_type == "funnel"
                 too_many = total > MAX_BAR_CATEGORIES and not (is_chronological and intent != "ranking")
+                # Determine sort direction independently of truncation
+                asc = ranked and str(exec_meta.get("sort_order", "")).lower() == "asc"
                 if ranked or too_many:
-                    asc = ranked and not too_many and str(exec_meta.get("sort_order", "")).lower() == "asc"
                     df = df.sort_values(metric_col, ascending=asc, kind="stable")
                 if too_many:
-                    notes.append(f"Showing the top {MAX_BAR_CATEGORIES} of {total} categories.")
+                    if asc:
+                        notes.append(f"Showing the bottom {MAX_BAR_CATEGORIES} of {total} categories.")
+                    else:
+                        notes.append(f"Showing the top {MAX_BAR_CATEGORIES} of {total} categories.")
                     df = df.head(MAX_BAR_CATEGORIES)
 
             if (chart_type in ("pie", "donut") and len(df) > MAX_PIE_CATEGORIES and metric_numeric
@@ -858,7 +874,13 @@ def build_unified_data_contract(
                 arr = arr[np.unique(np.linspace(0, arr.size - 1, MAX_POINTS).astype(int))]
             distributions.append({"group": str(g), "values": arr.tolist(), "stats": _dist_stats(arr)})
         extras["distributions"] = distributions
+        # Rebuild x_categories and series at group granularity to match distributions
         x_categories = [d["group"] for d in distributions]
+        series = [{"name": str(metric_col), "axis": "y",
+                   "data": [d["stats"]["median"] if d["stats"] else 0.0 for d in distributions]}]
+        data_points = [{"label": d["group"],
+                        "val": d["stats"]["median"] if d["stats"] else 0.0,
+                        "raw_row": {}} for d in distributions]
 
     if (chart_type == "histogram" and exec_meta.get("bins") is None
             and group_col == metric_col and metric_numeric):

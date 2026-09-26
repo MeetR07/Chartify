@@ -3757,27 +3757,45 @@ html, body {
 
   /* Toolbar */
   .canvas-toolbar {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .canvas-toolbar::-webkit-scrollbar {
+    display: none;
   }
   .canvas-toolbar-left {
-    justify-content: space-between;
-    width: 100%;
+    width: auto;
+    flex-shrink: 0;
   }
   .canvas-actions {
-    justify-content: space-between;
-    width: 100%;
+    width: auto;
+    justify-content: flex-end;
+    flex-shrink: 0;
+    gap: 6px;
   }
   .canvas-surprise-btn {
-    padding: 5px 10px !important;
-    font-size: 0.70rem !important;
+    padding: 6px 8px !important;
+  }
+  .canvas-surprise-btn span {
+    display: none;
+  }
+  .view-toggle-btn {
+    padding: 4px 8px;
+    font-size: 0.65rem;
   }
   .download-btn span {
     display: none;
   }
   .download-btn {
-    padding: 6px 9px;
+    padding: 6px 8px;
+  }
+  .zoom-btn {
+    padding: 6px 8px;
   }
 
   /* 3D Canvas */
@@ -3800,6 +3818,55 @@ html, body {
   }
   .three-btn span {
     display: none;
+  }
+
+  /* 2D Canvas Chart Image */
+  .chart-viewport {
+    min-height: 250px;
+    padding: 8px;
+  }
+  .chart-image {
+    width: 100%;
+    max-width: 100%;
+    object-fit: contain;
+  }
+
+  /* Zoom Modal Mobile Overrides */
+  .modal-top-bar {
+    gap: 8px;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+  }
+  .modal-title {
+    font-size: 0.85rem;
+  }
+  .zoom-view-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    max-width: 100%;
+  }
+  .zoom-view-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .zoom-view-tabs button span {
+    display: none;
+  }
+  .zoom-view-tabs button {
+    padding: 6px 10px;
+  }
+  .modal-actions-right {
+    flex-shrink: 0;
+  }
+  .modal-actions-right .download-btn span {
+    display: none;
+  }
+  .modal-actions-right .download-btn {
+    padding: 6px 9px;
+  }
+  .modal-close-btn {
+    width: 32px;
+    height: 32px;
   }
 
   /* Data Summary Bar */
