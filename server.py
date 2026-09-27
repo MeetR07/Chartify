@@ -5,7 +5,7 @@ import sys
 import time
 import base64
 from typing import Optional, Dict, Any
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
@@ -35,14 +35,94 @@ from backend.chart_planner import ChartPlanner, build_unified_data_contract
 ACTIVE_DATASET_PATH = os.path.join(os.path.dirname(__file__), "active_dataset.csv")
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB limit to prevent DoS / Memory Exhaustion
 
-# If active_dataset.csv exists on startup, initialize main.df with it
+# --- Per-device dataset isolation -------------------------------------------------
+# Each browser/device sends an "X-Device-Id" header (a random id it generates once
+# and stores in localStorage). We keep a separate in-memory dataframe + a separate
+# CSV file per device_id so uploading from mobile never overwrites/shows up on laptop.
+DATASETS_DIR = os.path.join(os.path.dirname(__file__), "datasets")
+os.makedirs(DATASETS_DIR, exist_ok=True)
+
+DEVICE_DATAFRAMES: Dict[str, pd.DataFrame] = {}
+
+
+def get_default_dataset() -> pd.DataFrame:
+    return pd.DataFrame({
+        "Month": ["Jan", "Feb", "Mar", "Apr", "May"],
+        "Sales": [15000, 22000, 18000, 27000, 31000],
+        "Profit": [3000, 4500, -1200, 6000, 7500],
+        "Region": ["North", "South", "North", "West", "South"]
+    })
+
+
+def sanitize_device_id(device_id: Optional[str]) -> str:
+    """Keeps device ids filesystem/dict-key safe (alnum, dash, underscore only)."""
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", device_id or "")[:100]
+    return cleaned or "default"
+
+
+def get_device_dataset_path(device_id: str) -> str:
+    return os.path.join(DATASETS_DIR, f"dataset_{device_id}.csv")
+
+
+def get_device_df(device_id: str) -> pd.DataFrame:
+    device_id = sanitize_device_id(device_id)
+    if device_id in DEVICE_DATAFRAMES:
+        return DEVICE_DATAFRAMES[device_id]
+    path = get_device_dataset_path(device_id)
+    df = None
+    if os.path.exists(path):
+        try:
+            df = pd.read_csv(path)
+        except UnicodeDecodeError:
+            df = pd.read_csv(path, encoding="latin1")
+        except Exception as e:
+            print(f"Failed to load dataset for device {device_id}: {e}")
+    if df is None:
+        df = get_default_dataset()
+    DEVICE_DATAFRAMES[device_id] = df
+    return df
+
+
+def set_device_df(device_id: str, df: pd.DataFrame, persist: bool = True) -> None:
+    device_id = sanitize_device_id(device_id)
+    DEVICE_DATAFRAMES[device_id] = df
+    if persist:
+        try:
+            df.to_csv(get_device_dataset_path(device_id), index=False)
+        except Exception as e:
+            print(f"Failed to persist dataset for device {device_id}: {e}")
+
+
+def clear_device_df(device_id: str) -> None:
+    device_id = sanitize_device_id(device_id)
+    DEVICE_DATAFRAMES.pop(device_id, None)
+    path = get_device_dataset_path(device_id)
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
+def device_id_dep(x_device_id: Optional[str] = Header(None)) -> str:
+    """FastAPI dependency: reads the X-Device-Id header the frontend sends on every request."""
+    return sanitize_device_id(x_device_id)
+
+
+# One-time migration: if an old single shared active_dataset.csv exists from before
+# this change, adopt it as the "default" device's dataset instead of throwing it away.
 if os.path.exists(ACTIVE_DATASET_PATH):
     try:
-        main.df = pd.read_csv(ACTIVE_DATASET_PATH)
+        legacy_df = pd.read_csv(ACTIVE_DATASET_PATH)
+        DEVICE_DATAFRAMES["default"] = legacy_df
+        legacy_df.to_csv(get_device_dataset_path("default"), index=False)
+        main.df = legacy_df
         clear_profile_cache()
-        profile_dataset(main.df)
+        profile_dataset(legacy_df)
     except Exception as e:
-        print(f"Failed to load active_dataset.csv on startup: {e}")
+        print(f"Failed to migrate legacy active_dataset.csv: {e}")
+else:
+    main.df = get_default_dataset()
 
 
 def get_chart_data_url(filename: str) -> str:
@@ -146,6 +226,15 @@ class ScalableLRUCache:
             self.cache.clear()
             self.timestamps.clear()
 
+    def clear_prefix(self, prefix: str):
+        """Clears only entries whose key starts with prefix (used to clear one device's
+        cache/session entries without wiping every other device's data)."""
+        with self.lock:
+            keys_to_remove = [k for k in self.cache if isinstance(k, str) and k.startswith(prefix)]
+            for k in keys_to_remove:
+                del self.cache[k]
+                self.timestamps.pop(k, None)
+
     def __contains__(self, key):
         return self.get(key) is not None
 
@@ -168,28 +257,42 @@ SESSION_STORE = ScalableLRUCache(maxsize=1000, ttl_seconds=7200)
 RENDER_LOCK = threading.Lock()
 CHARTS_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_charts")
 os.makedirs(CHARTS_CACHE_DIR, exist_ok=True)
-LATEST_CHART_BYTES = None
-LATEST_CHART_FILENAME = "chart.png"
 
-def render_chart_safe(args):
+# Per-device "latest chart" cache, so device A downloading/exporting never grabs
+# device B's most-recently-generated chart.
+LATEST_CHART_BYTES_BY_DEVICE: Dict[str, bytes] = {}
+LATEST_CHART_FILENAME_BY_DEVICE: Dict[str, str] = {}
+
+
+def get_device_charts_dir(device_id: str) -> str:
+    d = os.path.join(CHARTS_CACHE_DIR, sanitize_device_id(device_id))
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def render_chart_safe(args, device_id: str = "default"):
     """Thread-safe renderer for Studio Matplotlib PNG, saves to disk and caches bytes for direct download."""
-    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
+    device_id = sanitize_device_id(device_id)
     with RENDER_LOCK:
         data_url = charts.generate_chart.invoke(args)
         if isinstance(data_url, str) and data_url.startswith("data:image/png;base64,"):
             try:
                 b64_part = data_url.split(",", 1)[1]
-                LATEST_CHART_BYTES = base64.b64decode(b64_part)
+                img_bytes = base64.b64decode(b64_part)
                 title = args.get("title") or args.get("chart_type") or "chart"
                 clean_title = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(title).lower())
-                LATEST_CHART_FILENAME = f"{clean_title}.png"
-                
-                # Write to disk so URL downloads with real .png extension always succeed
-                file_path = os.path.join(CHARTS_CACHE_DIR, LATEST_CHART_FILENAME)
-                with open(file_path, "wb") as f:
-                    f.write(LATEST_CHART_BYTES)
-                with open(os.path.join(CHARTS_CACHE_DIR, "latest.png"), "wb") as f:
-                    f.write(LATEST_CHART_BYTES)
+                filename = f"{clean_title}.png"
+
+                # Write to disk (in this device's own subfolder) so URL downloads with a
+                # real .png extension always succeed and never collide with other devices.
+                device_dir = get_device_charts_dir(device_id)
+                with open(os.path.join(device_dir, filename), "wb") as f:
+                    f.write(img_bytes)
+                with open(os.path.join(device_dir, "latest.png"), "wb") as f:
+                    f.write(img_bytes)
+
+                LATEST_CHART_BYTES_BY_DEVICE[device_id] = img_bytes
+                LATEST_CHART_FILENAME_BY_DEVICE[device_id] = filename
             except Exception as e:
                 print("Failed caching latest chart bytes:", e)
         return data_url
@@ -259,18 +362,18 @@ def build_dataset_payload(df: pd.DataFrame, filename: str = None) -> dict:
 
 
 @app.get("/api/dataset")
-async def get_dataset():
-    """Returns current dataset overview, column metadata, and sample rows."""
+async def get_dataset(device_id: str = Depends(device_id_dep)):
+    """Returns current dataset overview, column metadata, and sample rows for THIS device."""
     try:
-        return build_dataset_payload(main.df)
+        return build_dataset_payload(get_device_df(device_id))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/upload-csv")
-async def upload_csv(file: UploadFile = File(...)):
-    """Upload a new CSV file. Returns full dataset metadata so the frontend
-    does NOT need a separate /api/dataset call after upload."""
+async def upload_csv(file: UploadFile = File(...), device_id: str = Depends(device_id_dep)):
+    """Upload a new CSV file, scoped to THIS device only. Returns full dataset metadata
+    so the frontend does NOT need a separate /api/dataset call after upload."""
     try:
         contents = await file.read(MAX_UPLOAD_SIZE + 1)
         if len(contents) > MAX_UPLOAD_SIZE:
@@ -286,15 +389,12 @@ async def upload_csv(file: UploadFile = File(...)):
         if new_df.empty:
             raise HTTPException(status_code=400, detail="Uploaded CSV file is empty.")
 
-        main.df = new_df
-        try:
-            new_df.to_csv(ACTIVE_DATASET_PATH, index=False)
-        except Exception as save_err:
-            print(f"Failed to persist {ACTIVE_DATASET_PATH}: {save_err}")
+        set_device_df(device_id, new_df)
+        main.df = new_df  # kept in sync for any code elsewhere that still reads main.df directly
 
         clear_profile_cache()
-        LLM_CACHE.clear()
-        SESSION_STORE.clear()
+        LLM_CACHE.clear_prefix(f"{device_id}:")
+        SESSION_STORE.clear_prefix(f"{device_id}:")
         profile_dataset(new_df)
 
         return build_dataset_payload(new_df, filename=file.filename)
@@ -305,23 +405,15 @@ async def upload_csv(file: UploadFile = File(...)):
 
 
 @app.post("/api/reset-dataset")
-async def reset_dataset():
-    """Resets dataset to default retail data and clears active_dataset.csv."""
-    default_df = pd.DataFrame({
-        "Month": ["Jan", "Feb", "Mar", "Apr", "May"],
-        "Sales": [15000, 22000, 18000, 27000, 31000],
-        "Profit": [3000, 4500, -1200, 6000, 7500],
-        "Region": ["North", "South", "North", "West", "South"]
-    })
+async def reset_dataset(device_id: str = Depends(device_id_dep)):
+    """Resets THIS device's dataset back to the default retail sample data."""
+    default_df = get_default_dataset()
+    clear_device_df(device_id)
+    set_device_df(device_id, default_df)
     main.df = default_df
-    if os.path.exists(ACTIVE_DATASET_PATH):
-        try:
-            os.remove(ACTIVE_DATASET_PATH)
-        except Exception:
-            pass
     clear_profile_cache()
-    LLM_CACHE.clear()
-    SESSION_STORE.clear()
+    LLM_CACHE.clear_prefix(f"{device_id}:")
+    SESSION_STORE.clear_prefix(f"{device_id}:")
     profile_dataset(default_df)
     return build_dataset_payload(default_df, filename="retail_sales_default.csv")
 
@@ -511,20 +603,23 @@ def build_plan_from_args(args: dict, df: pd.DataFrame, schema: dict, query: str 
 
 
 @app.post("/api/generate-chart")
-async def generate_chart_endpoint(req: QueryRequest):
+async def generate_chart_endpoint(req: QueryRequest, device_id: str = Depends(device_id_dep)):
     """Processes user natural language request asynchronously through the layered NL-to-Chart pipeline."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty.")
 
     try:
-        current_df = main.df
+        current_df = get_device_df(device_id)
+        main.df = current_df  # kept in sync for any code elsewhere that still reads main.df directly
         session_id = getattr(req, "session_id", "default") or "default"
-        session_state = SESSION_STORE.get(session_id, {})
+        session_key = f"{device_id}:{session_id}"
+        session_state = SESSION_STORE.get(session_key, {})
         schema = get_dataset_schema(current_df)
 
-        # 0. Cache Lookup
+        # 0. Cache Lookup (device_id in the key so two devices never share a cached answer,
+        # even if they happen to upload datasets with the same fingerprint)
         dataset_fp = schema.get("dataset_fingerprint", "default")
-        cache_key = f"{dataset_fp}_{req.query.strip().lower()}_{req.style or 'whitegrid'}_{req.palette or 'deep'}_{getattr(req, 'orientation', 'auto') or 'auto'}"
+        cache_key = f"{device_id}:{dataset_fp}_{req.query.strip().lower()}_{req.style or 'whitegrid'}_{req.palette or 'deep'}_{getattr(req, 'orientation', 'auto') or 'auto'}"
         cached_res = LLM_CACHE.get(cache_key)
         if cached_res:
             res_copy = dict(cached_res)
@@ -674,10 +769,10 @@ async def generate_chart_endpoint(req: QueryRequest):
             "unified_contract": contract
         }
 
-        data_url = await asyncio.to_thread(render_chart_safe, render_args)
+        data_url = await asyncio.to_thread(render_chart_safe, render_args, device_id)
 
         # 11. Update Session Store
-        SESSION_STORE[session_id] = {
+        SESSION_STORE[session_key] = {
             "last_query": req.query,
             "last_plan": plan,
             "last_result_schema": {c: str(t) for c, t in zip(result_df.columns, result_df.dtypes)},
@@ -723,7 +818,7 @@ async def generate_chart_endpoint(req: QueryRequest):
 
 
 @app.post("/api/apply-style")
-async def apply_style_endpoint(req: Dict[str, Any]):
+async def apply_style_endpoint(req: Dict[str, Any], device_id: str = Depends(device_id_dep)):
     """Directly re-renders the chart with selected style & palette without calling the LLM asynchronously."""
     try:
         args = dict(req)
@@ -794,7 +889,7 @@ async def apply_style_endpoint(req: Dict[str, Any]):
                 args["title"] = contract["title"]
 
         # Restyle chart purely in-memory in a non-blocking worker thread
-        data_url = await asyncio.to_thread(render_chart_safe, args)
+        data_url = await asyncio.to_thread(render_chart_safe, args, device_id)
         if isinstance(data_url, str) and (data_url.startswith("Error generating") or data_url.startswith("Error:")):
             raise HTTPException(status_code=400, detail=data_url)
 
@@ -821,10 +916,10 @@ async def apply_style_endpoint(req: Dict[str, Any]):
 
 
 @app.post("/api/summarize-chart")
-async def summarize_chart_endpoint(req: SummarizeRequest):
+async def summarize_chart_endpoint(req: SummarizeRequest, device_id: str = Depends(device_id_dep)):
     """Feeds the active chart image & data points to the LLM to generate an executive summary."""
     try:
-        current_df = main.df
+        current_df = get_device_df(device_id)
         tool_args = dict(req.tool_args or {})
         chart_type = req.chart_type or tool_args.get("chart_type", "chart")
         query = req.query or tool_args.get("query", "")
@@ -858,7 +953,7 @@ async def summarize_chart_endpoint(req: SummarizeRequest):
 
 
 @app.get("/api/charts/{filename}")
-def get_chart_image(filename: str):
+def get_chart_image(filename: str, device_id: str = Depends(device_id_dep)):
     """Returns the generated PNG image strictly for inline display (never auto-downloads)."""
     # Guard against directory traversal, encoded paths, and hidden files
     raw_name = filename.strip().replace('\\', '/')
@@ -869,19 +964,24 @@ def get_chart_image(filename: str):
     if not (base_fn.lower().endswith((".png", ".jpg", ".jpeg", ".webp")) and not base_fn.startswith(".")):
         raise HTTPException(status_code=404, detail="Chart image not found.")
 
-    # Check CHARTS_CACHE_DIR first, then root working directory for legacy chart files
-    file_path = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, base_fn))
+    # Check this device's own folder first, then CHARTS_CACHE_DIR root / cwd for legacy files
+    device_dir_real = os.path.realpath(get_device_charts_dir(device_id))
+    device_path = os.path.realpath(os.path.join(device_dir_real, base_fn))
     charts_dir_real = os.path.realpath(CHARTS_CACHE_DIR)
     root_dir_real = os.path.realpath(os.getcwd())
 
-    if file_path.startswith(charts_dir_real) and os.path.exists(file_path):
-        target_path = file_path
+    if device_path.startswith(device_dir_real) and os.path.exists(device_path):
+        target_path = device_path
     else:
-        root_path = os.path.realpath(os.path.join(os.getcwd(), base_fn))
-        if root_path.startswith(root_dir_real) and os.path.exists(root_path):
-            target_path = root_path
+        legacy_path = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, base_fn))
+        if legacy_path.startswith(charts_dir_real) and os.path.exists(legacy_path):
+            target_path = legacy_path
         else:
-            raise HTTPException(status_code=404, detail="Chart image not found.")
+            root_path = os.path.realpath(os.path.join(os.getcwd(), base_fn))
+            if root_path.startswith(root_dir_real) and os.path.exists(root_path):
+                target_path = root_path
+            else:
+                raise HTTPException(status_code=404, detail="Chart image not found.")
 
     return FileResponse(
         target_path,
@@ -910,21 +1010,20 @@ class ExportRequest(BaseModel):
 
 
 @app.post("/api/export-png")
-def export_png_endpoint(req: ExportRequest):
+def export_png_endpoint(req: ExportRequest, device_id: str = Depends(device_id_dep)):
     """Guaranteed attachment download endpoint setting Content-Disposition: attachment."""
-    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
     try:
         img_bytes = None
         if req.image_data and "base64," in req.image_data:
             b64_part = req.image_data.split("base64,", 1)[1]
             img_bytes = base64.b64decode(b64_part)
-        elif LATEST_CHART_BYTES:
-            img_bytes = LATEST_CHART_BYTES
+        elif device_id in LATEST_CHART_BYTES_BY_DEVICE:
+            img_bytes = LATEST_CHART_BYTES_BY_DEVICE[device_id]
 
         if not img_bytes:
             raise HTTPException(status_code=404, detail="No chart image available to export.")
 
-        safe_fn = sanitize_export_filename(req.filename or LATEST_CHART_FILENAME or "chart.png")
+        safe_fn = sanitize_export_filename(req.filename or LATEST_CHART_FILENAME_BY_DEVICE.get(device_id) or "chart.png")
 
         return Response(
             content=img_bytes,
@@ -942,16 +1041,16 @@ def export_png_endpoint(req: ExportRequest):
 
 
 @app.get("/api/download-chart")
-def download_latest_chart_endpoint(filename: Optional[str] = None):
+def download_latest_chart_endpoint(filename: Optional[str] = None, device_id: str = Depends(device_id_dep)):
     """Direct browser GET download endpoint that triggers system save dialog."""
-    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
-    if not LATEST_CHART_BYTES:
+    img_bytes = LATEST_CHART_BYTES_BY_DEVICE.get(device_id)
+    if not img_bytes:
         raise HTTPException(status_code=404, detail="No chart generated yet to download.")
 
-    safe_fn = sanitize_export_filename(filename or LATEST_CHART_FILENAME or "chart.png")
+    safe_fn = sanitize_export_filename(filename or LATEST_CHART_FILENAME_BY_DEVICE.get(device_id) or "chart.png")
 
     return Response(
-        content=LATEST_CHART_BYTES,
+        content=img_bytes,
         media_type="image/png",
         headers={
             "Content-Disposition": f'attachment; filename="{safe_fn}"',
@@ -962,19 +1061,18 @@ def download_latest_chart_endpoint(filename: Optional[str] = None):
 
 
 @app.get("/api/charts/download/{filename}")
-def download_chart_by_filename_endpoint(filename: str):
+def download_chart_by_filename_endpoint(filename: str, device_id: str = Depends(device_id_dep)):
     """Direct URL download with exact filename ending in .png (ensures browser never uses UUID)."""
-    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
     raw_name = filename.strip().replace('\\', '/')
     if ".." in raw_name or "/" in raw_name or raw_name.startswith("."):
         raise HTTPException(status_code=404, detail="Chart not found")
 
     safe_fn = sanitize_export_filename(filename)
-    filepath = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, safe_fn))
-    latest_path = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, "latest.png"))
-    charts_dir_real = os.path.realpath(CHARTS_CACHE_DIR)
+    device_dir_real = os.path.realpath(get_device_charts_dir(device_id))
+    filepath = os.path.realpath(os.path.join(device_dir_real, safe_fn))
+    latest_path = os.path.realpath(os.path.join(device_dir_real, "latest.png"))
 
-    if not filepath.startswith(charts_dir_real):
+    if not filepath.startswith(device_dir_real):
         raise HTTPException(status_code=404, detail="Chart not found")
 
     target_path = filepath if os.path.exists(filepath) else (latest_path if os.path.exists(latest_path) else None)
@@ -988,9 +1086,10 @@ def download_chart_by_filename_endpoint(filename: str):
                 "Content-Type": "image/png"
             }
         )
-    elif LATEST_CHART_BYTES:
+    img_bytes = LATEST_CHART_BYTES_BY_DEVICE.get(device_id)
+    if img_bytes:
         return Response(
-            content=LATEST_CHART_BYTES,
+            content=img_bytes,
             media_type="image/png",
             headers={
                 "Content-Disposition": f'attachment; filename="{safe_fn}"',
@@ -1001,30 +1100,29 @@ def download_chart_by_filename_endpoint(filename: str):
 
 
 @app.post("/api/save-chart")
-def save_chart_endpoint(req: ExportRequest):
-    """Saves any chart image to disk cache so it can be downloaded with its exact .png name."""
-    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
+def save_chart_endpoint(req: ExportRequest, device_id: str = Depends(device_id_dep)):
+    """Saves any chart image to THIS device's disk cache so it can be downloaded with its exact .png name."""
     try:
         raw_b64 = req.image_data or ""
         if "base64," in raw_b64:
             raw_b64 = raw_b64.split("base64,", 1)[1]
-        img_bytes = base64.b64decode(raw_b64) if raw_b64 else LATEST_CHART_BYTES
+        img_bytes = base64.b64decode(raw_b64) if raw_b64 else LATEST_CHART_BYTES_BY_DEVICE.get(device_id)
         if not img_bytes:
             raise HTTPException(status_code=400, detail="No image data provided")
         
         safe_fn = sanitize_export_filename(req.filename)
-        charts_dir_real = os.path.realpath(CHARTS_CACHE_DIR)
-        filepath = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, safe_fn))
-        if not filepath.startswith(charts_dir_real):
+        device_dir_real = os.path.realpath(get_device_charts_dir(device_id))
+        filepath = os.path.realpath(os.path.join(device_dir_real, safe_fn))
+        if not filepath.startswith(device_dir_real):
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         with open(filepath, "wb") as f:
             f.write(img_bytes)
-        with open(os.path.join(CHARTS_CACHE_DIR, "latest.png"), "wb") as f:
+        with open(os.path.join(device_dir_real, "latest.png"), "wb") as f:
             f.write(img_bytes)
             
-        LATEST_CHART_BYTES = img_bytes
-        LATEST_CHART_FILENAME = safe_fn
+        LATEST_CHART_BYTES_BY_DEVICE[device_id] = img_bytes
+        LATEST_CHART_FILENAME_BY_DEVICE[device_id] = safe_fn
         return {"success": True, "download_url": f"/api/charts/download/{safe_fn}"}
     except HTTPException:
         raise
@@ -1033,14 +1131,16 @@ def save_chart_endpoint(req: ExportRequest):
 
 
 @app.post("/api/export-to-downloads")
-def export_directly_to_user_downloads(req: ExportRequest):
-    """Saves the chart PNG directly into the user's OS Downloads folder via Python."""
-    global LATEST_CHART_BYTES, LATEST_CHART_FILENAME
+def export_directly_to_user_downloads(req: ExportRequest, device_id: str = Depends(device_id_dep)):
+    """Saves the chart PNG directly into the SERVER machine's OS Downloads folder via Python.
+    NOTE: this only makes sense when the backend runs on your own laptop (localhost) — on a
+    cloud host like Render, os.path.expanduser('~')/Downloads is the server container's folder,
+    not the visiting device's Downloads folder, so this endpoint won't do anything useful there."""
     try:
         raw_b64 = req.image_data or ""
         if "base64," in raw_b64:
             raw_b64 = raw_b64.split("base64,", 1)[1]
-        img_bytes = base64.b64decode(raw_b64) if raw_b64 else LATEST_CHART_BYTES
+        img_bytes = base64.b64decode(raw_b64) if raw_b64 else LATEST_CHART_BYTES_BY_DEVICE.get(device_id)
         if not img_bytes:
             raise HTTPException(status_code=400, detail="No image data provided to export.")
         
@@ -1056,19 +1156,19 @@ def export_directly_to_user_downloads(req: ExportRequest):
         with open(downloads_target_path, "wb") as f:
             f.write(img_bytes)
             
-        # 2. Also save into project generated_charts folder
-        charts_dir_real = os.path.realpath(CHARTS_CACHE_DIR)
-        cache_path = os.path.realpath(os.path.join(CHARTS_CACHE_DIR, safe_fn))
-        if not cache_path.startswith(charts_dir_real):
+        # 2. Also save into this device's own generated_charts subfolder
+        device_dir_real = os.path.realpath(get_device_charts_dir(device_id))
+        cache_path = os.path.realpath(os.path.join(device_dir_real, safe_fn))
+        if not cache_path.startswith(device_dir_real):
             raise HTTPException(status_code=400, detail="Invalid filename")
 
         with open(cache_path, "wb") as f:
             f.write(img_bytes)
-        with open(os.path.join(CHARTS_CACHE_DIR, "latest.png"), "wb") as f:
+        with open(os.path.join(device_dir_real, "latest.png"), "wb") as f:
             f.write(img_bytes)
             
-        LATEST_CHART_BYTES = img_bytes
-        LATEST_CHART_FILENAME = safe_fn
+        LATEST_CHART_BYTES_BY_DEVICE[device_id] = img_bytes
+        LATEST_CHART_FILENAME_BY_DEVICE[device_id] = safe_fn
 
         # 3. Highlight the downloaded file in Windows Explorer so user immediately sees it
         try:
@@ -1094,3 +1194,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+
