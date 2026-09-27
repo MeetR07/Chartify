@@ -73,8 +73,8 @@ ALLOWED_ORIGINS = [o.strip() for o in env_origins.split(",") if o.strip()] if en
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
